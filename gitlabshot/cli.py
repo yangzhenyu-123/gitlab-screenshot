@@ -114,6 +114,16 @@ def main() -> int:
     parser.add_argument(
         "--executable-path", default=None, help="指定 Chromium 路径"
     )
+    parser.add_argument(
+        "--username",
+        default=None,
+        help="网页登录用户名（或环境变量 GITLABSHOT_USERNAME）；token 网页认证失败时用用户名+密码表单登录",
+    )
+    parser.add_argument(
+        "--password",
+        default=None,
+        help="网页登录密码（或环境变量 GITLABSHOT_PASSWORD）；与 --username 配合",
+    )
 
     args = parser.parse_args()
 
@@ -122,6 +132,10 @@ def main() -> int:
     if not args.project_url or not token:
         parser.print_help()
         return 1
+
+    # 网页登录回退凭证（可选）
+    username_arg = args.username or os.environ.get("GITLABSHOT_USERNAME")
+    password_arg = args.password or os.environ.get("GITLABSHOT_PASSWORD")
 
     # 2. 解析视口 WxH
     try:
@@ -151,6 +165,8 @@ def main() -> int:
         context_tag=args.context_tag,
         context_direction=args.context_direction,
         executable_path=args.executable_path,
+        username=username_arg,
+        password=password_arg,
     )
 
     # 4. 解析项目地址并填入 config
@@ -221,9 +237,12 @@ def main() -> int:
             print(f"警告：private_token / Basic Auth 方式失败（{exc}），尝试表单登录回退")
 
         if not session_ok:
+            # token 网页认证失败：优先用提供的用户名+密码表单登录
+            login_user = config.username or username  # 显式用户名优先，否则用 API 获取的
+            login_pass = config.password if (config.username and config.password) else config.token
             try:
                 establish_session_form(
-                    page, config.base_url, username, config.token
+                    page, config.base_url, login_user, login_pass
                 )
                 print("GitLab 网页登录成功（表单登录）")
             except LoginError as exc:
