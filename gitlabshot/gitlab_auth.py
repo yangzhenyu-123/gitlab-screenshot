@@ -64,49 +64,55 @@ def establish_session_basic(context: Any, base_url: str, token: str) -> None:
     )
 
 
-def establish_session_form(page: Any, base_url: str, username: str, token: str) -> None:
+def establish_session_form(
+    page: Any, base_url: str, username: str, credential: str, credential_kind: str = "password"
+) -> None:
     """通过 GitLab 登录表单建立网页会话（回退方式）。
 
     page 为 Playwright 同步 API 的 Page 对象；base_url 末尾斜杠会被去除。
-    以「用户名 + token 作为密码」提交登录表单。登录成功（当前 URL 不再含
-    /users/sign_in）后正常返回，失败抛 LoginError。
+    以「用户名 + credential 作为密码」提交登录表单。credential_kind 用于
+    日志标识（"password" 或 "token"）。登录成功（当前 URL 不再含
+    /users/sign_in）后正常返回，失败抛 LoginError（含页面错误提示）。
 
     注意：较新版本 GitLab 可能不接受 PAT 作为表单密码，此方式仅作回退。
     """
     base = base_url.rstrip("/")
     sign_in_url = f"{base}/users/sign_in"
+    masked = mask_token(credential)
     logger.info(
-        "回退到表单登录 username=%s token=%s", username, mask_token(token)
+        "回退到表单登录 username=%s %s=%s", username, credential_kind, masked
     )
 
     timeout_error = _playwright_timeout_error()
 
     page.goto(sign_in_url)
 
-    # 等待登录表单加载
-    page.wait_for_selector("#user_login")
-    page.wait_for_selector("#user_password")
+    # 等待登录表单加载（兼容多版本选择器）
+    login_selectors = ("#user_login", "input[name='user[login]']", "input#username")
+    pwd_selectors = ("#user_password", "input[name='user[password]']", "input#password")
+    login_sel = _first_visible(page, login_selectors)
+    pwd_sel = _first_visible(page, pwd_selectors)
+    if not login_sel or not pwd_sel:
+        raise LoginError(
+            "GitLab 网页登录失败：未找到登录表单字段（用户名或密码输入框）"
+        )
 
-    # 填充用户名与 token（作为密码）
-    page.fill("#user_login", username)
-    page.fill("#user_password", token)
+    # 填充用户名与凭证（作为密码）
+    page.fill(login_sel, username)
+    page.fill(pwd_sel, credential)
 
     # 点击提交按钮：优先 #new_user 表单内提交按钮，回退到通用选择器
-    for selector in (
+    submit_selectors = (
         "#new_user input[type=submit]",
+        "#new_user button[type=submit]",
         "input[type=submit]",
         "button[type=submit]",
-    ):
-        try:
-            page.click(selector)
-            break
-        except Exception as exc:
-            # 选择器未找到/超时则尝试下一个，其它异常向上抛
-            if timeout_error is not None and not isinstance(exc, timeout_error):
-                raise
-            continue
-    else:
+        "button[name='commit']",
+    )
+    submit_sel = _first_visible(page, submit_selectors)
+    if not submit_sel:
         raise LoginError("GitLab 网页登录失败：未找到登录表单提交按钮")
+    page.click(submit_sel)
 
     # 等待跳转完成：容忍 networkidle 超时（某些 GitLab 版本存在长连接）
     try:
@@ -118,11 +124,42 @@ def establish_session_form(page: Any, base_url: str, username: str, token: str) 
 
     # 校验登录成功：当前 URL 不含 /users/sign_in 即视为成功
     if "/users/sign_in" in page.url:
+        # 尝试读取页面错误提示，便于诊断
+        alert = _read_alert(page)
         raise LoginError(
             "GitLab 网页登录失败：登录后仍停留在登录页 "
-            f"(username={username}, token={mask_token(token)})"
+            f"(username={username}, {credential_kind}={masked})"
+            + (f"，页面提示：{alert}" if alert else "")
         )
     logger.info("GitLab 表单登录成功")
+
+
+def _first_visible(page: Any, selectors: tuple) -> Optional[str]:
+    """返回第一个存在的选择器，均不存在返回 None。"""
+    for sel in selectors:
+        try:
+            if page.is_visible(sel, timeout=2000):
+                return sel
+        except Exception:
+            continue
+    return None
+
+
+def _read_alert(page: Any) -> str:
+    """尝试读取登录页面的错误提示文本，失败返回空串。"""
+    for sel in (
+        ".flash-alert",
+        ".alert-danger",
+        ".flash-container .alert",
+        "[role='alert']",
+    ):
+        try:
+            text = page.inner_text(sel, timeout=1000).strip()
+            if text:
+                return text
+        except Exception:
+            continue
+    return ""
 
 
 def verify_session(page: Any, base_url: str, project_path: str, token: str) -> bool:

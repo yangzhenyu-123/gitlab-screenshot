@@ -238,15 +238,27 @@ def main() -> int:
 
         if not session_ok:
             # token 网页认证失败：优先用提供的用户名+密码表单登录
-            login_user = config.username or username  # 显式用户名优先，否则用 API 获取的
-            login_pass = config.password if (config.username and config.password) else config.token
+            if config.username and config.password:
+                login_user = config.username
+                login_pass = config.password
+                cred_kind = "password"
+            else:
+                login_user = config.username or username  # 显式用户名优先，否则用 API 获取的
+                login_pass = config.token
+                cred_kind = "token"
             try:
                 establish_session_form(
-                    page, config.base_url, login_user, login_pass
+                    page, config.base_url, login_user, login_pass, cred_kind
                 )
-                print("GitLab 网页登录成功（表单登录）")
+                print(f"GitLab 网页登录成功（表单登录，{cred_kind}）")
             except LoginError as exc:
                 print(f"错误：GitLab 网页登录失败（{exc}）")
+                if cred_kind == "token":
+                    print(
+                        "提示：当前用 token 作为表单密码登录失败。"
+                        "请设置环境变量 GITLABSHOT_USERNAME 与 GITLABSHOT_PASSWORD"
+                        "（或加 --username/--password 参数）用账号密码登录。"
+                    )
                 return 5
 
         # 9. 创建临时目录
