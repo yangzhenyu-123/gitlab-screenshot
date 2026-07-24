@@ -1,14 +1,15 @@
-# gitlabshot — GitLab 仓库审计逐屏截图转 Word 工具
+# gitlabshot — GitLab 仓库审计逐屏截图工具
 
-在内网 GitLab 环境下，对代码仓库进行审计/统计归档：自动截取**主线、送测产品基线版本、送测产品版本发布时间、送测产品版本标签、其它分支**共 5 类页面，按章节合并到 Word 文档。
+在内网 GitLab 环境下，对代码仓库进行审计/统计归档：自动截取**主线、送测产品基线版本、送测产品版本发布时间、送测产品版本标签、其它分支**共 5 类页面，按命名规范直接保存为 PNG 文件。
 
-与"全页面长截图"方案不同，本工具按**浏览器视口高度逐屏截图**（`full_page=False`），每张图高度不超过一屏，粘贴到 Word 后无需缩放、阅读体验好；每张截图顶部自动注入**模拟浏览器地址栏**（仅显示 `https://...` 文本，无图标），便于审计时确认页面来源。
+与"全页面长截图"方案不同，本工具按**浏览器视口高度逐屏截图**（`full_page=False`），每张图高度不超过一屏；每张截图顶部自动注入**模拟浏览器地址栏**（仅显示 `https://...` 文本，无图标），便于审计时确认页面来源。
 
 ---
 
 ## 功能特性
 
-- **5 类审计章节**：主线 / 送测产品基线版本 / 送测产品版本发布时间 / 送测产品版本标签 / 分支
+- **直接保存 PNG 文件**：按命名规范 `{包名}_{类型}{序号}.png` 保存，序号两位 01-99
+- **5 类审计截图**：主线 / 送测产品基线版本 / 送测产品版本发布时间 / 送测产品版本标签 / 分支
 - **YAML 配置文件**：通过 `--config` 集中管理项目地址、token、基线 tag、发布标签等，命令行参数优先级更高
 - **Token + 用户名密码双认证**：API 用 PAT 调用；网页会话用用户名+密码表单登录（token 方式的网页认证在内网不可用，已移除）
 - **逐视口截图**：Playwright 无头 Chromium 按视口高度滚动，每屏单独保存
@@ -16,8 +17,6 @@
 - **懒加载处理**：截图前移除 `loading` 属性、预滚动触发加载、等待 `networkidle`
 - **固定元素隐藏**：默认注入 CSS 隐藏 GitLab 顶部导航与左侧栏（可 `--keep-fixed` 保留）
 - **超长页面保护**：`--max-screens` 兜底；commits 类页面用 `--commit-screens` 限定只截前几屏（3-5 个提交）
-- **分章节 Word 文档**：python-docx 按审计维度分章，每张截图独占一页（或 `--continuous` 连续排列）
-- **DPI 预处理**：PIL 写入 96 DPI 元数据，避免 Word 自动压缩模糊
 - **诊断友好**：每步截图前打印完整访问路径；失败时打印具体原因
 - **内网友好**：依赖支持离线安装，Chromium 可离线部署，默认忽略自签名证书错误
 
@@ -31,8 +30,6 @@
 | pip | 随 Python | 包管理 | 配置内网 PyPI 镜像或离线 whl |
 | Playwright (Python) | ≥ 1.40 | 浏览器自动化 | `pip install playwright`（离线 whl） |
 | Chromium 浏览器 | 由 Playwright 管理 | 无头渲染 | 见下方"Chromium 离线安装" |
-| python-docx | ≥ 1.0 | Word 文档生成 | `pip install python-docx`（离线 whl） |
-| Pillow | ≥ 10.0 | 图像 DPI 预处理 | `pip install Pillow`（离线 whl） |
 | requests | ≥ 2.28 | 调用 GitLab API | `pip install requests`（离线 whl） |
 | PyYAML | ≥ 6.0 | 配置文件解析 | `pip install pyyaml`（离线 whl） |
 
@@ -65,17 +62,34 @@ playwright install chromium
 
 ---
 
-## 5 类审计章节
+## 5 类审计截图与文件命名
 
-| 序号 | 章节 | 截图内容 | URL 模式 |
+### 截图类型
+
+| 序号 | 类型 | 截图内容 | URL 模式 |
 |------|------|----------|----------|
-| 1 | 主线 | master 分支整页文件树 | `<仓库根 URL>` |
-| 2 | 送测产品基线版本 | 基线 tag 的 commit A 之后第2个 commit C | `/-/commits/<C>` |
-| 3 | 送测产品版本发布时间 | 配置的 release_tag | `/-/commits/<release_tag>` |
-| 4 | 送测产品版本标签 | 标签列表第一页 | `/-/tags` |
-| 5 | 分支 | 除 master 外的其它分支 | `/-/tree/<branch>` |
+| 1 | master | master 分支整页文件树 | `<仓库根 URL>` |
+| 2 | baseline | 基线 tag 的 commit A 之后第2个 commit C | `/-/commits/<C>` |
+| 3 | release | 配置的 release_tag | `/-/commits/<release_tag>` |
+| 4 | tag | 标签列表第一页 | `/-/tags` |
+| 5 | `{分支名}` | 除 master 外的其它分支 | `/-/tree/<branch>` |
 
 **产品基线逻辑**：取 `baseline_tag` 的 commit A → 取 A 之后（时间更晚）的第 2 个 commit C → 打开 `/-/commits/C`（页面顶部显示 C，其下为中间 commit，再下为 A，共前 3 个提交）。若基线 tag 不存在，改用初始提交（root）之后的第 2 个 commit。
+
+### 文件命名规范
+
+截图直接保存为 PNG 文件，命名格式：`{包名}_{类型}{序号}.png`
+
+| 类型 | 格式 | 示例 |
+|------|------|------|
+| master 分支 | `{包名}_master{NN}.png` | `anaconda_master01.png` |
+| baseline | `{包名}_baseline{NN}.png` | `anaconda_baseline01.png` |
+| release | `{包名}_release{NN}.png` | `anaconda_release01.png` |
+| tag | `{包名}_tag{NN}.png` | `anaconda_tag01.png` |
+| 其他分支 | `{包名}_{分支名}{NN}.png` | `anaconda_ztbug-1323-zyyang01.png` |
+
+- 序号固定两位，从 `01` 递增，上限 `99`（超过 99 张的多余截图将被忽略并警告）
+- 包名默认取项目路径末段（如 `.../httpd` → `httpd`），可用 `--pkg-name` 覆盖
 
 ---
 
@@ -91,7 +105,8 @@ token: ""                              # 建议留空，用环境变量
 baseline_tag: "20250901_Release"
 release_tag: "20260622_Release"
 executable_path: "/usr/bin/google-chrome"
-output: "audit.docx"
+output_dir: "./screenshots"
+pkg_name: ""                           # 留空则取项目路径末段
 # username/password 建议用环境变量传入，避免明文
 ```
 
@@ -106,17 +121,19 @@ gitlabshot --config config.yml
 ### 方式二：纯命令行
 
 ```bash
-# 基本用法（5 类章节全截）。token 用于 API，用户名密码用于网页登录
+# 基本用法（5 类截图全截，保存到 ./screenshots）
 export GITLABSHOT_USERNAME="yourname"
 export GITLABSHOT_PASSWORD="yourpass"
 gitlabshot https://gitlab.internal/group/project \
-  --token <PAT> --executable-path /usr/bin/google-chrome -o audit.docx
+  --token <PAT> --executable-path /usr/bin/google-chrome \
+  -o ./screenshots
 
-# 指定基线 tag 与发布标签
+# 指定基线 tag 与发布标签，自定义包名
 gitlabshot https://gitlab.internal/group/project --token <PAT> \
   --baseline-tag 20250901_Release \
   --release-tag 20260622_Release \
-  --executable-path /usr/bin/google-chrome -o audit.docx
+  --pkg-name myapp \
+  --executable-path /usr/bin/google-chrome -o ./out
 ```
 
 ---
@@ -133,15 +150,14 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 | `release_tag` | 送测产品版本发布标签 |
 | `username` / `password` | 网页登录凭证（必填，建议用环境变量） |
 | `executable_path` | Chromium 路径 |
-| `output` | 输出 docx 路径 |
+| `output_dir` | 截图输出目录（默认 `.`） |
+| `pkg_name` | 文件名前缀（包名），留空则取项目路径末段 |
 | `viewport` | 视口尺寸 `WxH` |
 | `wait` | 每屏等待毫秒 |
 | `max_screens` | 长页面最大屏数 |
 | `commit_screens` | commits 页面截图屏数（默认 1） |
-| `format` / `quality` / `dpi` | 图片格式、JPEG 质量、DPI |
-| `margin` | Word 页面边距（英寸） |
+| `format` / `quality` | 图片格式、JPEG 质量 |
 | `keep_fixed` | 是否保留 GitLab 固定元素 |
-| `continuous` | 同子节内截图是否连续排列 |
 
 ---
 
@@ -152,7 +168,8 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 | `project_url` | （必填） | GitLab 项目地址，可由配置文件提供 |
 | `--config` | （空） | YAML 配置文件路径 |
 | `--token` | （必填*） | Personal Access Token，也可用环境变量 `GITLABSHOT_TOKEN` 或配置文件 |
-| `-o, --output` | `audit.docx` | 输出 docx 路径 |
+| `-o, --output-dir` | `.` | 截图文件输出目录 |
+| `--pkg-name` | （项目路径末段） | 文件名前缀（包名） |
 | `--viewport` | `1440x900` | 视口尺寸，格式 `WxH` |
 | `--wait` | `800` | 每屏滚动后等待毫秒 |
 | `--max-screens` | `20` | 单页最大屏数上限，防止超长页面 |
@@ -160,11 +177,8 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 | `--baseline-tag` | `20250901_Release` | 产品基线参考标签 |
 | `--release-tag` | （空） | 送测产品版本发布标签 |
 | `--keep-fixed` | `False` | 保留 GitLab 固定元素（不注入隐藏 CSS） |
-| `--continuous` | `False` | 连续排列（同子节内截图不分页，子节/章节间仍分页） |
 | `--format` | `png` | 图片格式：`png` 或 `jpeg` |
 | `--quality` | `85` | JPEG 质量（PNG 忽略） |
-| `--margin` | `0.5` | Word 页边距（英寸） |
-| `--dpi` | `96` | 截图 DPI 元数据 |
 | `--branch` | （空） | 指定分支（可多次传入），不传则截取所有分支 |
 | `--executable-path` | （空） | 指定系统 Chromium 路径 |
 | `--username` | （必填） | 网页登录用户名，也可用环境变量 `GITLABSHOT_USERNAME` 或配置文件 |
@@ -190,43 +204,14 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 3. **获取项目元数据**：`GET /projects/{url_encoded_path}` 拿到 `id` 与 `default_branch`
 4. **启动浏览器**：无头 Chromium，注入反检测脚本，`ignore_https_errors=True`
 5. **建立网页会话**：用用户名+密码提交 GitLab 登录表单，登录成功后 cookie 维持后续页面访问（token 不用于网页认证）
-6. **按 5 类章节截图**（每章为 Word 的 Heading 1）：
-   - **主线**：截仓库根 URL
-   - **送测产品基线版本**：取基线 tag commit A 后第2个 commit C，截 `/-/commits/C`
-   - **送测产品版本发布时间**：截 `/-/commits/<release_tag>`
-   - **送测产品版本标签**：截 `/-/tags` 第一页
-   - **分支**：截除 master 外各分支的 `/-/tree/<branch>`
-7. **生成 Word**：python-docx 按章节插入截图，PIL 预处理 DPI，每张图独占一页
+6. **按 5 类截图并保存文件**：
+   - **master**：截仓库根 URL，保存为 `{包名}_master{NN}.png`
+   - **baseline**：取基线 tag commit A 后第2个 commit C，截 `/-/commits/C`，保存为 `{包名}_baseline{NN}.png`
+   - **release**：截 `/-/commits/<release_tag>`，保存为 `{包名}_release{NN}.png`
+   - **tag**：截 `/-/tags` 第一页，保存为 `{包名}_tag{NN}.png`
+   - **分支**：截除 master 外各分支的 `/-/tree/<branch>`，保存为 `{包名}_{分支名}{NN}.png`
 
 每张截图前：打印访问路径 → 注入模拟地址栏（显示 URL 文本）→ 移除 `img` 的 `loading` 属性 → 预滚动触发懒加载 → 等 `networkidle` → 回滚顶部 → 重新读 `scrollHeight` → 注入隐藏 CSS（除非 `--keep-fixed`）→ 按视口高度逐屏 `full_page=False` 截图。失败时打印具体原因并跳过。
-
----
-
-## Word 文档结构
-
-```
-Heading 1  主线
-  Heading 2  master
-    [截图]（首屏顶部含模拟地址栏）
-    [截图]（后续屏）
-    ...
-Heading 1  送测产品基线版本
-  Heading 2  <baseline_tag>
-    [截图]
-Heading 1  送测产品版本发布时间
-  Heading 2  <release_tag>
-    [截图]
-Heading 1  送测产品版本标签
-  [截图]
-Heading 1  分支
-  Heading 2  <分支名>
-    [截图]
-  Heading 2  <分支名>
-    ...
-```
-
-- 默认每张截图后分页；`--continuous` 时同一 Heading 2 内不分页，但子节/章节间仍分页
-- 空章节自动跳过，不插入空标题
 
 ---
 
@@ -235,13 +220,13 @@ Heading 1  分支
 | 退出码 | 含义 |
 |--------|------|
 | 0 | 成功 |
-| 1 | 参数错误（缺项目地址或 token） |
-| 2 | 项目地址不可达 / 文档生成失败 |
-| 3 | 未捕获到任何截图（全部章节为空） |
+| 1 | 参数错误（缺项目地址、token 或用户名密码） |
+| 2 | 项目地址不可达 |
+| 3 | 未捕获到任何截图 |
 | 4 | Chromium 缺失 |
 | 5 | Token 无效或网页登录失败 |
 
-API 持续失败（429/5xx 重试 3 次仍失败）时跳过对应章节并警告，继续其他章节。
+API 持续失败（429/5xx 重试 3 次仍失败）时跳过对应截图类型并警告，继续其它类型。
 
 ---
 
@@ -249,14 +234,13 @@ API 持续失败（429/5xx 重试 3 次仍失败）时跳过对应章节并警�
 
 ```
 gitlabshot/
-├── cli.py            # CLI 入口与主编排（5 类章节、配置文件加载）
+├── cli.py            # CLI 入口与主编排（5 类截图、配置文件加载、文件命名）
 ├── config.py         # Config 数据类（所有可调参数及默认值）
 ├── config_loader.py  # YAML 配置文件加载模块
 ├── gitlab_api.py     # GitLab REST API 客户端（token、项目、分支、tag、commit、root commit）
 ├── gitlab_auth.py    # 网页会话建立（用户名+密码表单登录）
 ├── capture.py        # Playwright 逐视口截图核心（含模拟地址栏注入）
-├── preprocess.py     # 图像 DPI 预处理
-└── docx_writer.py    # Word 文档生成
+├── saver.py          # 截图文件按命名规范保存（{包名}_{类型}{NN}.png）
 config.example.yml    # 配置文件示例
 pyproject.toml        # 依赖声明与命令入口
 requirements.txt      # 离线 pip download 依赖清单

@@ -6,6 +6,7 @@
 project_url: "https://gitlab.linx-info.cd/linxos-v8/code/opensource/baseos/security-facility/httpd"
 
 # Personal Access Token（必填，或用环境变量 GITLABSHOT_TOKEN）
+# 用于 API 调用（项目元数据、分支、tag、commit）
 # 建议用环境变量，避免明文写入配置文件
 token: ""
 
@@ -16,7 +17,7 @@ baseline_tag: "20250901_Release"
 # 送测产品版本发布标签：截图 https://<仓库路径>/-/commits/<release_tag>
 release_tag: "20260622_Release"
 
-# 网页登录回退凭证（token 网页认证失败时用用户名+密码表单登录）
+# 网页登录凭证（token 仅用于 API，网页会话用用户名+密码表单登录）
 # 建议用环境变量 GITLABSHOT_USERNAME / GITLABSHOT_PASSWORD
 username: ""
 password: ""
@@ -24,8 +25,12 @@ password: ""
 # Chromium 可执行文件路径（内网通常指定系统 Chromium）
 executable_path: "/usr/bin/google-chrome"
 
-# 输出 docx 路径
-output: "audit.docx"
+# 截图文件输出目录
+output_dir: "./screenshots"
+
+# 文件名前缀（包名），留空则取项目路径末段（如 .../httpd → httpd）
+# 命名格式：{pkg_name}_{类型}{序号}.png，如 httpd_master01.png
+pkg_name: ""
 
 # 视口尺寸（宽x高），影响每屏截图高度
 viewport: "1440x900"
@@ -42,13 +47,6 @@ commit_screens: 1
 # 图片格式与质量
 format: "png"
 quality: 85
-dpi: 96
-
-# 页面边距（英寸）
-margin: 0.5
 
 # 是否保留 GitLab 固定导航栏/侧边栏（默认隐藏）
 keep_fixed: false
-
-# 同一子节内多张截图是否连续排列（默认每张分页）
-continuous: false
