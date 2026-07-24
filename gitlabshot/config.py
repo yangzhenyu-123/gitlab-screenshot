@@ -34,6 +34,12 @@ class Config:
     context_tag: Optional[str] = None
     context_direction: str = "newer"  # newer | older
 
+    # ---- 版本发布时间 / 产品基线 截图 ----
+    # commits 类页面（/-/commits/<ref>）只截前几屏，默认 1 屏（约 3-5 个提交）
+    commit_max_screens: int = 1
+    # 产品基线参考标签：存在则取其 commit A 及之后 2 个 commit；不存在则取初始提交之后 2 个
+    baseline_tag: str = "20250901_Release"
+
     # ---- 网页登录回退（token 方式失败时使用用户名+密码表单登录）----
     username: Optional[str] = None  # 显式用户名，覆盖 API 获取的 username
     password: Optional[str] = None  # 账号密码，用于表单登录回退

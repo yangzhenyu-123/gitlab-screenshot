@@ -115,6 +115,17 @@ def main() -> int:
         "--executable-path", default=None, help="指定 Chromium 路径"
     )
     parser.add_argument(
+        "--baseline-tag",
+        default="20250901_Release",
+        help="产品基线参考标签（存在则取其 commit 及后2个；不存在则用初始提交后2个）",
+    )
+    parser.add_argument(
+        "--commit-screens",
+        type=int,
+        default=1,
+        help="版本发布时间/产品基线 commits 页面截图屏数（默认1，只截前几个提交）",
+    )
+    parser.add_argument(
         "--username",
         default=None,
         help="网页登录用户名（或环境变量 GITLABSHOT_USERNAME）；token 网页认证失败时用用户名+密码表单登录",
@@ -165,6 +176,8 @@ def main() -> int:
         context_tag=args.context_tag,
         context_direction=args.context_direction,
         executable_path=args.executable_path,
+        baseline_tag=args.baseline_tag,
+        commit_max_screens=args.commit_screens,
         username=username_arg,
         password=password_arg,
     )
@@ -279,10 +292,14 @@ def main() -> int:
         branch_subsections: list[SubSection] = []
         for branch in branches:
             print(f"正在截图分支 {branch}...")
-            url = (
-                f"{config.base_url}/{config.project_path}/tree/"
-                f"{urllib.parse.quote(branch, safe='')}"
-            )
+            # master（默认分支）用仓库根 URL，其它分支用 /-/tree/<branch>
+            if branch == default_branch:
+                url = f"{config.base_url}/{config.project_path}"
+            else:
+                url = (
+                    f"{config.base_url}/{config.project_path}/-/tree/"
+                    f"{urllib.parse.quote(branch, safe='')}"
+                )
             try:
                 imgs = capture_page(page, url, config, tmp_dir)
             except NavigationError:
@@ -295,9 +312,9 @@ def main() -> int:
                 Chapter(title="分支文件树", subsections=branch_subsections)
             )
 
-        # 12. Tags 列表章
+        # 12. 版本标签列表章（/-/tags，截第一页）
         tags_list_url = f"{config.base_url}/{config.project_path}/-/tags"
-        print("正在截图 Tags 列表...")
+        print("正在截图版本标签列表...")
         try:
             tags_imgs = capture_page(page, tags_list_url, config, tmp_dir)
         except NavigationError:
@@ -306,98 +323,107 @@ def main() -> int:
         if tags_imgs:
             content.chapters.append(
                 Chapter(
-                    title="Tags 列表",
+                    title="版本标签列表",
                     subsections=[SubSection(title="", images=tags_imgs)],
                 )
             )
 
-        # 13. Tag Commits 章
+        # 13. 版本发布时间章（每个 tag 的 /-/commits/<tag>，只截一屏取前几个提交）
         try:
             tags = client.list_tags(project_id)
         except APIError as exc:
             print(f"警告：API 调用失败（{exc}），跳过对应内容")
             tags = []
-        tag_commit_subsections: list[SubSection] = []
+        release_subsections: list[SubSection] = []
         for tag_name, commit_sha in tags:
-            print(f"正在截图 Tag {tag_name} 的 commit...")
-            url = f"{config.base_url}/{config.project_path}/-/commit/{commit_sha}"
+            print(f"正在截图版本发布时间 {tag_name}...")
+            url = (
+                f"{config.base_url}/{config.project_path}/-/commits/"
+                f"{urllib.parse.quote(tag_name, safe='')}"
+            )
             try:
-                imgs = capture_page(page, url, config, tmp_dir)
+                imgs = capture_page(
+                    page, url, config, tmp_dir,
+                    max_screens=config.commit_max_screens,
+                )
             except NavigationError:
                 print(f"警告：页面 {url} 截图失败，已跳过")
                 continue
             if imgs:
-                tag_commit_subsections.append(
-                    SubSection(title=tag_name, images=imgs)
-                )
-        if tag_commit_subsections:
+                release_subsections.append(SubSection(title=tag_name, images=imgs))
+        if release_subsections:
             content.chapters.append(
-                Chapter(title="Tag Commits", subsections=tag_commit_subsections)
+                Chapter(title="版本发布时间", subsections=release_subsections)
             )
 
-        # 14. Context 章（若指定 context_tag）
-        if config.context_tag:
-            try:
-                target_sha = client.get_tag_commit(project_id, config.context_tag)
-            except TagNotFoundError:
-                print(f"警告：Tag {config.context_tag} 不存在，跳过上下文截图")
-                target_sha = None
-            except APIError as exc:
-                print(f"警告：API 调用失败（{exc}），跳过对应内容")
-                target_sha = None
+        # 14. 产品基线章
+        # 情况1：存在 config.baseline_tag 标签 → 取其 commit A → 取 A 之后（newer）2 个 commit，
+        #        用较新的那个打开 /-/commits/<sha>，页面显示该 commit、中间 commit、A（前3个提交）
+        # 情况2：不存在该标签 → 取初始提交(root)之后 2 个 commit，用较新的打开 /-/commits/<sha>
+        baseline_subsections: list[SubSection] = []
+        baseline_target_sha = None
+        baseline_label = ""
+        try:
+            baseline_target_sha = client.get_tag_commit(project_id, config.baseline_tag)
+            baseline_label = f"{config.baseline_tag} 的 commit"
+            baseline_mode = "tag"
+        except TagNotFoundError:
+            baseline_mode = "root"
+            print(f"提示：未找到基线标签 {config.baseline_tag}，改用初始提交")
+        except APIError as exc:
+            print(f"警告：获取基线标签失败（{exc}），跳过产品基线")
+            baseline_mode = None
 
-            if target_sha:
-                try:
-                    commits = client.list_commits(project_id, default_branch)
-                except APIError as exc:
-                    print(f"警告：API 调用失败（{exc}），跳过对应内容")
-                    commits = []
-                context_shas = client.find_commit_context(
-                    commits,
-                    target_sha,
-                    config.context_direction,
-                    count=2,
-                )
-                commit_list = [(target_sha, "target")] + [
-                    (sha, f"{config.context_direction} {i + 1}")
-                    for i, sha in enumerate(context_shas)
-                ]
-                context_subsections: list[SubSection] = []
-                # 说明性 Heading 2 子节（无截图）
-                context_subsections.append(
-                    SubSection(
-                        title=(
-                            f"说明：{config.context_tag} 的 commit 及后两个 commit"
-                            f"（方向：{config.context_direction}）"
-                        ),
-                        images=[],
-                        level=2,
-                    )
-                )
-                for sha, label in commit_list:
-                    print(f"正在截图 Context {label}（{sha[:8]}）...")
-                    url = f"{config.base_url}/{config.project_path}/-/commit/{sha}"
+        if baseline_mode:
+            try:
+                commits = client.list_commits(project_id, default_branch)
+            except APIError as exc:
+                print(f"警告：获取提交历史失败（{exc}），跳过产品基线")
+                commits = []
+
+            if commits:
+                if baseline_mode == "root":
                     try:
-                        imgs = capture_page(page, url, config, tmp_dir)
-                    except NavigationError:
-                        print(f"警告：页面 {url} 截图失败，已跳过")
-                        continue
-                    if imgs:
-                        context_subsections.append(
-                            SubSection(
-                                title=f"{label} ({sha[:8]})",
-                                images=imgs,
-                                level=3,
-                            )
+                        baseline_target_sha = client.get_root_commit(
+                            project_id, default_branch
                         )
-                # 仅当至少有一个 commit 截图时才追加章节（说明子节无图）
-                if any(sub.images for sub in context_subsections):
-                    content.chapters.append(
-                        Chapter(
-                            title=f"Context: {config.context_tag}",
-                            subsections=context_subsections,
-                        )
+                        baseline_label = "初始提交"
+                    except APIError as exc:
+                        print(f"警告：获取初始提交失败（{exc}），跳过产品基线")
+                        baseline_target_sha = None
+
+                if baseline_target_sha:
+                    # 取 target 之后（newer，时间更晚）的 2 个 commit
+                    context_shas = client.find_commit_context(
+                        commits, baseline_target_sha, "newer", count=2,
                     )
+                    if context_shas:
+                        # 用较新的那个（列表最后一个，最远离 target=最新）打开 commits 页
+                        open_sha = context_shas[-1]
+                        print(f"正在截图产品基线 commits/{open_sha[:8]}...")
+                        url = (
+                            f"{config.base_url}/{config.project_path}/-/commits/"
+                            f"{open_sha}"
+                        )
+                        try:
+                            imgs = capture_page(
+                                page, url, config, tmp_dir,
+                                max_screens=config.commit_max_screens,
+                            )
+                        except NavigationError:
+                            print(f"警告：页面 {url} 截图失败，已跳过")
+                            imgs = []
+                        if imgs:
+                            baseline_subsections.append(
+                                SubSection(title=baseline_label, images=imgs)
+                            )
+                    else:
+                        print(f"警告：无法获取 {baseline_label} 之后的 commit，跳过产品基线")
+
+        if baseline_subsections:
+            content.chapters.append(
+                Chapter(title="产品基线", subsections=baseline_subsections)
+            )
 
         # 15. 关闭浏览器
         try:

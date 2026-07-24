@@ -63,12 +63,19 @@ def launch_browser(config: Config, http_credentials=None):
     return (browser, context, page)
 
 
-def capture_page(page, url: str, config: Config, tmp_dir) -> list:
-    """对指定 URL 逐视口截图，返回截图文件 Path 列表。tmp_dir 是 pathlib.Path。"""
+def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = None) -> list:
+    """对指定 URL 逐视口截图，返回截图文件 Path 列表。tmp_dir 是 pathlib.Path。
+
+    max_screens: 可选，覆盖 config.max_screens。用于 commits 类页面（版本发布
+    时间、产品基线）只截前几屏（前几个提交），传 1 即只截一屏。
+    """
     # a. 导航到目标 URL（附加 private_token 参数，用于网页认证）
     #    GitLab 网页端识别 ?private_token=TOKEN 并据此建立会话视图，
     #    对内网禁用 Basic Auth / 表单 PAT 登录的场景尤为关键。
     from urllib.parse import urlsplit, urlunsplit, urlencode
+
+    if max_screens is None:
+        max_screens = config.max_screens
 
     parts = urlsplit(url)
     if config.token:
@@ -134,7 +141,7 @@ def capture_page(page, url: str, config: Config, tmp_dir) -> list:
     screenshots = []
     scroll_y = 0
     page_num = 1
-    while scroll_y < total_height and page_num <= config.max_screens:
+    while scroll_y < total_height and page_num <= max_screens:
         page.evaluate(f"window.scrollTo(0, {scroll_y})")
         page.wait_for_timeout(config.wait_ms)
         path = tmp_dir / f"page_{page_num:03d}.png"
@@ -143,7 +150,7 @@ def capture_page(page, url: str, config: Config, tmp_dir) -> list:
         scroll_y += viewport_height
         page_num += 1
 
-    if page_num > config.max_screens and scroll_y < total_height:
+    if page_num > max_screens and scroll_y < total_height:
         print("达到最大屏数上限，可能存在未捕获内容")
 
     # h. 返回截图 Path 列表（空列表表示未捕获）

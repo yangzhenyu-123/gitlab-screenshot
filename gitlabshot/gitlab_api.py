@@ -183,6 +183,42 @@ class GitLabAPIClient:
             page += 1
         return result
 
+    def get_root_commit(self, project_id: int, ref_name: str) -> str:
+        """获取指定 ref 的初始提交（root commit）SHA。
+
+        GitLab commits API 按「最新在前」返回，初始提交在最后一页的末尾。
+        先用 per_page=1 探测总页数（X-Total-Pages header），再取最后一页的
+        最后一个 commit；若无分页 header 则逐页翻到末尾。
+        """
+        # 先探测总页数
+        resp = self._request(
+            "GET",
+            f"/projects/{project_id}/repository/commits",
+            params={"ref_name": ref_name, "per_page": 1, "page": 1},
+        )
+        if not resp.ok:
+            raise APIError(f"获取初始提交失败: HTTP {resp.status_code}")
+        total_pages = resp.headers.get("X-Total-Pages")
+        if total_pages and total_pages.isdigit() and int(total_pages) > 0:
+            last_page = int(total_pages)
+            resp = self._request(
+                "GET",
+                f"/projects/{project_id}/repository/commits",
+                params={"ref_name": ref_name, "per_page": 100, "page": last_page},
+            )
+            if not resp.ok:
+                raise APIError(f"获取初始提交失败: HTTP {resp.status_code}")
+            data = resp.json()
+            if not data:
+                raise APIError("获取初始提交失败：最后一页为空")
+            # 最后一页最后一个元素即初始提交
+            return data[-1].get("id", "")
+        # 无分页 header，逐页翻到末尾
+        commits = self.list_commits(project_id, ref_name)
+        if not commits:
+            raise APIError("获取初始提交失败：提交历史为空")
+        return commits[-1][0]
+
     @staticmethod
     def find_commit_context(
         commits: list[tuple[str, str, str]],
