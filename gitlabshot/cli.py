@@ -44,7 +44,10 @@ from gitlabshot.docx_writer import (
 def parse_project_url(url: str) -> tuple[str, str, str]:
     """解析 GitLab 项目地址，返回 (base_url, project_path, url_encoded_path)。
 
-    如 https://gitlab.internal/group/subgroup/project ->
+    兼容网页 URL 与 clone 地址（末尾带 .git 后缀会被剥离）：
+        https://gitlab.internal/group/subgroup/project
+        https://gitlab.internal/group/subgroup/project.git
+    均解析为：
         base_url = https://gitlab.internal
         project_path = group/subgroup/project
         url_encoded_path = group%2Fsubgroup%2Fproject
@@ -52,6 +55,9 @@ def parse_project_url(url: str) -> tuple[str, str, str]:
     parts = urllib.parse.urlsplit(url)
     base_url = f"{parts.scheme}://{parts.netloc}"
     project_path = parts.path.strip("/")
+    # 剥离 clone 地址末尾的 .git 后缀（GitLab API 与网页 URL 均不含该后缀）
+    if project_path.lower().endswith(".git"):
+        project_path = project_path[: -len(".git")]
     url_encoded_path = urllib.parse.quote(project_path, safe="")
     return base_url, project_path, url_encoded_path
 
