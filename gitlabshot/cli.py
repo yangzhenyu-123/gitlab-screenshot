@@ -323,8 +323,8 @@ def main() -> int:
         master_url = f"{config.base_url}/{config.project_path}"
         try:
             master_imgs = capture_page(page, master_url, config, tmp_dir)
-        except NavigationError:
-            print(f"警告：页面 {master_url} 截图失败，已跳过")
+        except NavigationError as exc:
+            print(f"警告：{exc}，已跳过")
             master_imgs = []
         if master_imgs:
             master_subsections.append(
@@ -388,8 +388,8 @@ def main() -> int:
                                 page, url, config, tmp_dir,
                                 max_screens=config.commit_max_screens,
                             )
-                        except NavigationError:
-                            print(f"警告：页面 {url} 截图失败，已跳过")
+                        except NavigationError as exc:
+                            print(f"警告：{exc}，已跳过")
                             imgs = []
                         if imgs:
                             baseline_subsections.append(
@@ -416,8 +416,8 @@ def main() -> int:
                     page, url, config, tmp_dir,
                     max_screens=config.commit_max_screens,
                 )
-            except NavigationError:
-                print(f"警告：页面 {url} 截图失败，已跳过")
+            except NavigationError as exc:
+                print(f"警告：{exc}，已跳过")
                 imgs = []
             if imgs:
                 release_subsections.append(
@@ -435,8 +435,8 @@ def main() -> int:
         print("正在截图版本标签列表...")
         try:
             tags_imgs = capture_page(page, tags_list_url, config, tmp_dir)
-        except NavigationError:
-            print(f"警告：页面 {tags_list_url} 截图失败，已跳过")
+        except NavigationError as exc:
+            print(f"警告：{exc}，已跳过")
             tags_imgs = []
         if tags_imgs:
             content.chapters.append(
@@ -466,8 +466,8 @@ def main() -> int:
             )
             try:
                 imgs = capture_page(page, url, config, tmp_dir)
-            except NavigationError:
-                print(f"警告：页面 {url} 截图失败，已跳过")
+            except NavigationError as exc:
+                print(f"警告：{exc}，已跳过")
                 continue
             if imgs:
                 branch_subsections.append(SubSection(title=branch, images=imgs))

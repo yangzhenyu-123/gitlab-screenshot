@@ -87,10 +87,15 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
             (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
         )
 
+    # 打印仓库地址之后的完整路径，便于确认（用不含 token 的 display_url）
+    print(f"  访问路径：{display_url}")
+
     try:
         page.goto(url, wait_until="networkidle")
     except PlaywrightError as e:
-        raise NavigationError(f"导航失败: {url} ({e})")
+        raise NavigationError(
+            f"导航失败: {display_url}（原因：{e}）"
+        )
 
     # b. 注入模拟浏览器地址栏（只显示 https:// 文本，不含 favicon/锁图标）
     #    以普通文档流插入 body 顶部，出现在第一屏截图，随滚动离开视口
