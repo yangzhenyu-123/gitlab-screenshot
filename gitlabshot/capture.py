@@ -78,6 +78,7 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
         max_screens = config.max_screens
 
     parts = urlsplit(url)
+    display_url = url  # 保留原始 URL（不含 private_token）用于地址栏显示
     if config.token:
         existing = parts.query
         extra = urlencode({"private_token": config.token})
@@ -91,7 +92,28 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
     except PlaywrightError as e:
         raise NavigationError(f"导航失败: {url} ({e})")
 
-    # b. 隐藏 GitLab 固定元素（导航栏、侧边栏等）
+    # b. 注入模拟浏览器地址栏（只显示 https:// 文本，不含 favicon/锁图标）
+    #    以普通文档流插入 body 顶部，出现在第一屏截图，随滚动离开视口
+    page.evaluate(
+        """(url) => {
+            const bar = document.createElement('div');
+            bar.setAttribute('data-gitlabshot-urlbar', '1');
+            bar.style.cssText = (
+                'display:flex;align-items:center;box-sizing:border-box;'
+                + 'width:100%;height:40px;padding:0 16px;'
+                + 'background:#f1f3f4;border-bottom:1px solid #dadce0;'
+                + 'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",'
+                + 'Roboto,Helvetica,Arial,sans-serif;font-size:14px;'
+                + 'color:#202124;white-space:nowrap;overflow:hidden;'
+                + 'text-overflow:ellipsis;position:relative;z-index:99999;'
+            );
+            bar.textContent = url;
+            document.body.insertBefore(bar, document.body.firstChild);
+        }""",
+        display_url,
+    )
+
+    # c. 隐藏 GitLab 固定元素（导航栏、侧边栏等）
     if not config.keep_fixed:
         page.add_style_tag(
             content=(
@@ -101,13 +123,13 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
             )
         )
 
-    # c. 移除懒加载属性，确保图片随滚动加载
+    # d. 移除懒加载属性，确保图片随滚动加载
     page.evaluate(
         "document.querySelectorAll('img[loading]').forEach("
         "img => img.removeAttribute('loading'));"
     )
 
-    # d. 预滚动触发懒加载：步进 300px，每步 100ms，滚到底部后回到顶部
+    # e. 预滚动触发懒加载：步进 300px，每步 100ms，滚到底部后回到顶部
     page.evaluate(
         """async () => {
             await new Promise((resolve) => {
@@ -131,13 +153,13 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
     except PlaywrightError:
         pass
 
-    # e. 重新读取页面总高度（预滚动后内容可能扩展）
+    # f. 重新读取页面总高度（预滚动后内容可能扩展）
     total_height = page.evaluate("document.body.scrollHeight")
 
-    # f. 视口高度
+    # g. 视口高度
     viewport_height = config.viewport_height
 
-    # g. 主截图循环：按视口高度逐屏滚动并截图
+    # h. 主截图循环：按视口高度逐屏滚动并截图
     screenshots = []
     scroll_y = 0
     page_num = 1
