@@ -39,6 +39,9 @@ class Config:
     # ---- 版本发布时间 / 产品基线 截图 ----
     # commits 类页面（/-/commits/<ref>）只截前几屏，默认 1 屏（约 3-5 个提交）
     commit_max_screens: int = 1
+    # commits 类页面单屏截图高度（像素），默认为视口高度的一半（450），
+    # 只截视口顶部实现"减半高度"；不影响其它页面（master/tag/分支）的全局视口
+    commit_viewport_height: int = 450
     # 产品基线参考标签：存在则取其 commit A 及之后第 2 个 commit
     baseline_tag: str = "20250901_Release"
     # 送测产品版本发布标签：截图 /-/commits/<release_tag>

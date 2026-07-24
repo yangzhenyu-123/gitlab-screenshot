@@ -4,6 +4,7 @@
     {包名}_{类型}{序号}.png
 序号固定两位，从 01 开始递增（最大 99）。
 """
+import shutil
 from pathlib import Path
 from typing import Iterable
 
@@ -33,8 +34,8 @@ def save_images(
             break
         fname = f"{pkg_name}_{kind}{idx:02d}.png"
         dest = output_dir / fname
-        # 复制而非移动，避免影响临时目录清理逻辑
-        Path(img).replace(dest)
+        # 移动截图到输出目录；跨文件系统时 shutil.move 会自动降级为复制+删除
+        shutil.move(str(img), str(dest))
         saved.append(fname)
         print(f"  已保存：{dest}")
     return saved

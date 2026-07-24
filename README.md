@@ -156,6 +156,7 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 | `wait` | 每屏等待毫秒 |
 | `max_screens` | 长页面最大屏数 |
 | `commit_screens` | commits 页面截图屏数（默认 1） |
+| `commit_viewport_height` | commits 类页面单屏截图高度（默认 450，视口高度一半） |
 | `format` / `quality` | 图片格式、JPEG 质量 |
 | `keep_fixed` | 是否保留 GitLab 固定元素 |
 
@@ -174,12 +175,14 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 | `--wait` | `800` | 每屏滚动后等待毫秒 |
 | `--max-screens` | `20` | 单页最大屏数上限，防止超长页面 |
 | `--commit-screens` | `1` | commits 类页面截图屏数（1 屏约 3-5 个提交） |
+| `--commit-viewport-height` | `450` | commits 类页面单屏截图高度（视口高度一半），不影响其它页面 |
 | `--baseline-tag` | `20250901_Release` | 产品基线参考标签 |
 | `--release-tag` | （空） | 送测产品版本发布标签 |
 | `--keep-fixed` | `False` | 保留 GitLab 固定元素（不注入隐藏 CSS） |
 | `--format` | `png` | 图片格式：`png` 或 `jpeg` |
 | `--quality` | `85` | JPEG 质量（PNG 忽略） |
 | `--branch` | （空） | 指定分支（可多次传入），不传则截取所有分支 |
+| `--only` | （空） | 只截指定类型（`master`/`baseline`/`release`/`tag`），可逗号分隔或多次传入；不传则全截，指定后未列出的类型及分支截图将被跳过 |
 | `--executable-path` | （空） | 指定系统 Chromium 路径 |
 | `--username` | （必填） | 网页登录用户名，也可用环境变量 `GITLABSHOT_USERNAME` 或配置文件 |
 | `--password` | （必填） | 网页登录密码，也可用环境变量 `GITLABSHOT_PASSWORD` 或配置文件 |

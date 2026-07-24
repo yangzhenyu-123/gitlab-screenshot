@@ -101,6 +101,13 @@ def main() -> int:
         "--branch", action="append", default=None, help="指定分支（可多次）"
     )
     parser.add_argument(
+        "--only",
+        action="append",
+        default=None,
+        help="只截指定类型（master/baseline/release/tag），可逗号分隔或多次传入；"
+        "不传则全截。指定后未列出的类型及分支截图将被跳过",
+    )
+    parser.add_argument(
         "--context-tag", default=None, help="指定 tag 做上下文截图"
     )
     parser.add_argument(
@@ -129,6 +136,13 @@ def main() -> int:
         help="版本发布时间/产品基线 commits 页面截图屏数（默认1，只截前几个提交）",
     )
     parser.add_argument(
+        "--commit-viewport-height",
+        type=int,
+        default=None,
+        help="commits 类页面（版本发布时间/产品基线）单屏截图高度（像素），"
+        "默认为视口高度一半（450），只截视口顶部；不影响其它页面",
+    )
+    parser.add_argument(
         "--username",
         default=None,
         help="网页登录用户名（或环境变量 GITLABSHOT_USERNAME）；token 网页认证失败时用用户名+密码表单登录",
@@ -140,6 +154,24 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    # 0. 解析 --only：只截指定内置类型（master/baseline/release/tag）
+    #    支持逗号分隔或多次传入；不传则全截（不过滤）
+    valid_types = {"master", "baseline", "release", "tag"}
+    only_types: set = set()
+    if args.only:
+        for part in args.only:
+            for name in part.split(","):
+                name = name.strip().lower()
+                if name:
+                    only_types.add(name)
+        unknown = only_types - valid_types
+        if unknown:
+            print(
+                f"错误：--only 含未知类型：{', '.join(sorted(unknown))}"
+                f"（可选：{', '.join(sorted(valid_types))}）"
+            )
+            return 1
 
     # 1. 加载配置文件（若指定），命令行参数优先
     from gitlabshot.config_loader import load_config_file, ConfigFileError
@@ -210,6 +242,11 @@ def main() -> int:
         baseline_tag=baseline_tag_val,
         release_tag=release_tag_val,
         commit_max_screens=args.commit_screens,
+        commit_viewport_height=(
+            args.commit_viewport_height
+            if args.commit_viewport_height is not None
+            else cfg_file.get("commit_viewport_height", 450)
+        ),
         username=username_arg,
         password=password_arg,
     )
@@ -287,78 +324,90 @@ def main() -> int:
         tmp_dir = Path(tempfile.mkdtemp(prefix="gitlabshot_"))
 
         # 10. 主线截图（master 分支，仓库根 URL，整页滚动）
-        print(f"正在截图主线 {default_branch}...")
-        master_url = f"{config.base_url}/{config.project_path}"
-        try:
-            master_imgs = capture_page(page, master_url, config, tmp_dir)
-        except NavigationError as exc:
-            print(f"警告：{exc}，已跳过")
-            master_imgs = []
-        total_saved += len(save_images(master_imgs, output_dir, pkg_name, "master"))
+        if only_types and "master" not in only_types:
+            print("跳过主线截图（--only 未包含 master）")
+        else:
+            print(f"正在截图主线 {default_branch}...")
+            master_url = f"{config.base_url}/{config.project_path}"
+            try:
+                master_imgs = capture_page(
+                    page, master_url, config, tmp_dir, target_x=48,
+                )
+            except NavigationError as exc:
+                print(f"警告：{exc}，已跳过")
+                master_imgs = []
+            total_saved += len(save_images(master_imgs, output_dir, pkg_name, "master"))
 
         # 11. 送测产品基线版本截图
         # 取 baseline_tag 的 commit A，再取 A 之后（newer）第 2 个 commit C，
         # 用 C 打开 /-/commits/C，页面显示 C、中间 commit、A 前3个提交
-        baseline_target_sha = None
-        baseline_label = ""
-        try:
-            baseline_target_sha = client.get_tag_commit(project_id, config.baseline_tag)
-            baseline_label = config.baseline_tag
-            baseline_mode = "tag"
-        except TagNotFoundError:
-            baseline_mode = "root"
-            print(f"提示：未找到基线标签 {config.baseline_tag}，改用初始提交")
-        except APIError as exc:
-            print(f"警告：获取基线标签失败（{exc}），跳过产品基线")
-            baseline_mode = None
-
-        if baseline_mode:
+        if only_types and "baseline" not in only_types:
+            print("跳过产品基线截图（--only 未包含 baseline）")
+        else:
+            baseline_target_sha = None
+            baseline_label = ""
             try:
-                commits = client.list_commits(project_id, default_branch)
+                baseline_target_sha = client.get_tag_commit(project_id, config.baseline_tag)
+                baseline_label = config.baseline_tag
+                baseline_mode = "tag"
+            except TagNotFoundError:
+                baseline_mode = "root"
+                print(f"提示：未找到基线标签 {config.baseline_tag}，改用初始提交")
             except APIError as exc:
-                print(f"警告：获取提交历史失败（{exc}），跳过产品基线")
-                commits = []
+                print(f"警告：获取基线标签失败（{exc}），跳过产品基线")
+                baseline_mode = None
 
-            if commits:
-                if baseline_mode == "root":
-                    try:
-                        baseline_target_sha = client.get_root_commit(
-                            project_id, default_branch
-                        )
-                        baseline_label = "初始提交"
-                    except APIError as exc:
-                        print(f"警告：获取初始提交失败（{exc}），跳过产品基线")
-                        baseline_target_sha = None
+            if baseline_mode:
+                try:
+                    commits = client.list_commits(project_id, default_branch)
+                except APIError as exc:
+                    print(f"警告：获取提交历史失败（{exc}），跳过产品基线")
+                    commits = []
 
-                if baseline_target_sha:
-                    # 取 target 之后（newer，时间更晚）的 2 个 commit
-                    context_shas = client.find_commit_context(
-                        commits, baseline_target_sha, "newer", count=2,
-                    )
-                    if context_shas:
-                        # 用第 2 个（较新、最远离 target）打开 commits 页
-                        open_sha = context_shas[-1]
-                        print(f"正在截图产品基线 commits/{open_sha[:8]}...")
-                        url = (
-                            f"{config.base_url}/{config.project_path}/-/commits/"
-                            f"{open_sha}"
-                        )
+                if commits:
+                    if baseline_mode == "root":
                         try:
-                            imgs = capture_page(
-                                page, url, config, tmp_dir,
-                                max_screens=config.commit_max_screens,
+                            baseline_target_sha = client.get_root_commit(
+                                project_id, default_branch
                             )
-                        except NavigationError as exc:
-                            print(f"警告：{exc}，已跳过")
-                            imgs = []
-                        total_saved += len(
-                            save_images(imgs, output_dir, pkg_name, "baseline")
+                            baseline_label = "初始提交"
+                        except APIError as exc:
+                            print(f"警告：获取初始提交失败（{exc}），跳过产品基线")
+                            baseline_target_sha = None
+
+                    if baseline_target_sha:
+                        # 取 target 之后（newer，时间更晚）的 2 个 commit
+                        context_shas = client.find_commit_context(
+                            commits, baseline_target_sha, "newer", count=2,
                         )
-                    else:
-                        print(f"警告：无法获取 {baseline_label} 之后的 commit，跳过产品基线")
+                        if context_shas:
+                            # 用第 2 个（较新、最远离 target）打开 commits 页
+                            open_sha = context_shas[-1]
+                            print(f"正在截图产品基线 commits/{open_sha[:8]}...")
+                            url = (
+                                f"{config.base_url}/{config.project_path}/-/commits/"
+                                f"{open_sha}"
+                            )
+                            try:
+                                imgs = capture_page(
+                                    page, url, config, tmp_dir,
+                                    max_screens=config.commit_max_screens,
+                                    inject_urlbar=False,
+                                    shot_height=config.commit_viewport_height,
+                                )
+                            except NavigationError as exc:
+                                print(f"警告：{exc}，已跳过")
+                                imgs = []
+                            total_saved += len(
+                                save_images(imgs, output_dir, pkg_name, "baseline")
+                            )
+                        else:
+                            print(f"警告：无法获取 {baseline_label} 之后的 commit，跳过产品基线")
 
         # 12. 送测产品版本发布时间截图（只截配置的 release_tag）
-        if config.release_tag:
+        if only_types and "release" not in only_types:
+            print("跳过版本发布时间截图（--only 未包含 release）")
+        elif config.release_tag:
             print(f"正在截图版本发布时间 {config.release_tag}...")
             url = (
                 f"{config.base_url}/{config.project_path}/-/commits/"
@@ -368,6 +417,8 @@ def main() -> int:
                 imgs = capture_page(
                     page, url, config, tmp_dir,
                     max_screens=config.commit_max_screens,
+                    inject_urlbar=False,
+                    shot_height=config.commit_viewport_height,
                 )
             except NavigationError as exc:
                 print(f"警告：{exc}，已跳过")
@@ -377,38 +428,47 @@ def main() -> int:
             print("提示：未配置 release_tag，跳过版本发布时间截图")
 
         # 13. 送测产品版本标签截图（/-/tags，截第一页）
-        tags_list_url = f"{config.base_url}/{config.project_path}/-/tags"
-        print("正在截图版本标签列表...")
-        try:
-            tags_imgs = capture_page(page, tags_list_url, config, tmp_dir)
-        except NavigationError as exc:
-            print(f"警告：{exc}，已跳过")
-            tags_imgs = []
-        total_saved += len(save_images(tags_imgs, output_dir, pkg_name, "tag"))
-
-        # 14. 分支截图（排除 master 的其它分支）
-        if config.branches:
-            branches = config.branches
+        if only_types and "tag" not in only_types:
+            print("跳过版本标签截图（--only 未包含 tag）")
         else:
+            tags_list_url = f"{config.base_url}/{config.project_path}/-/tags"
+            print("正在截图版本标签列表...")
             try:
-                branches = client.list_branches(project_id)
-            except APIError as exc:
-                print(f"警告：API 调用失败（{exc}），跳过对应内容")
-                branches = []
-        # 排除 master（已在主线截取）
-        other_branches = [b for b in branches if b != default_branch]
-        for branch in other_branches:
-            print(f"正在截图分支 {branch}...")
-            url = (
-                f"{config.base_url}/{config.project_path}/-/tree/"
-                f"{urllib.parse.quote(branch, safe='')}"
-            )
-            try:
-                imgs = capture_page(page, url, config, tmp_dir)
+                tags_imgs = capture_page(
+                    page, tags_list_url, config, tmp_dir, inject_urlbar=False,
+                )
             except NavigationError as exc:
                 print(f"警告：{exc}，已跳过")
-                continue
-            total_saved += len(save_images(imgs, output_dir, pkg_name, branch))
+                tags_imgs = []
+            total_saved += len(save_images(tags_imgs, output_dir, pkg_name, "tag"))
+
+        # 14. 分支截图（排除 master 的其它分支）
+        #     --only 指定后分支不属于内置 4 类，整段跳过
+        if only_types:
+            print("跳过分支截图（已指定 --only）")
+        else:
+            if config.branches:
+                branches = config.branches
+            else:
+                try:
+                    branches = client.list_branches(project_id)
+                except APIError as exc:
+                    print(f"警告：API 调用失败（{exc}），跳过对应内容")
+                    branches = []
+            # 排除 master（已在主线截取）
+            other_branches = [b for b in branches if b != default_branch]
+            for branch in other_branches:
+                print(f"正在截图分支 {branch}...")
+                url = (
+                    f"{config.base_url}/{config.project_path}/-/tree/"
+                    f"{urllib.parse.quote(branch, safe='')}"
+                )
+                try:
+                    imgs = capture_page(page, url, config, tmp_dir)
+                except NavigationError as exc:
+                    print(f"警告：{exc}，已跳过")
+                    continue
+                total_saved += len(save_images(imgs, output_dir, pkg_name, branch))
 
         # 15. 关闭浏览器
         try:

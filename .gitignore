@@ -22,3 +22,5 @@ tmp_screenshots/
 .DS_Store
 .idea/
 .vscode/
+*.png
+config.yml

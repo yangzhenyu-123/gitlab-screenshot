@@ -44,6 +44,10 @@ max_screens: 20
 # 版本发布时间/产品基线 commits 页面截图屏数（1 屏约 3-5 个提交）
 commit_screens: 1
 
+# commits 类页面单屏截图高度（像素），默认为视口高度一半（450），只截视口顶部；
+# 不影响其它页面（master/tag/分支）的全局视口
+commit_viewport_height: 450
+
 # 图片格式与质量
 format: "png"
 quality: 85
