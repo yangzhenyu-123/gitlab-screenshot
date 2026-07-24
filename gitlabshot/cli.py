@@ -1,13 +1,13 @@
 """GitLab 仓库审计截图工具 CLI 入口与主编排模块。
 
-串联 config / gitlab_api / gitlab_auth / capture / preprocess / docx_writer
-各模块，按「分支文件树 → Tags 列表 → Tag Commits → Context」顺序逐屏截图，
-并生成含审计截图的 Word 文档。
+串联 config / config_loader / gitlab_api / gitlab_auth / capture / saver
+各模块，按「主线 → 送测产品基线版本 → 送测产品版本发布时间 → 送测产品版本标签 → 分支」
+顺序逐屏截图，并按命名规范直接保存为 PNG 文件。
 
 退出码：
     0  成功
-    1  参数错误（缺 URL/token）
-    2  导航失败/项目不可达/文档生成失败
+    1  参数错误（缺 URL/token/用户名密码）
+    2  项目不可达
     3  未捕获任何截图
     4  Chromium 缺失
     5  token 无效或登录失败
@@ -33,12 +33,7 @@ from gitlabshot.capture import (
     capture_page,
     launch_browser,
 )
-from gitlabshot.docx_writer import (
-    Chapter,
-    DocContent,
-    SubSection,
-    build_docx,
-)
+from gitlabshot.saver import save_images
 
 
 def parse_project_url(url: str) -> tuple[str, str, str]:
@@ -80,7 +75,10 @@ def main() -> int:
         help="Personal Access Token（或环境变量 GITLABSHOT_TOKEN）",
     )
     parser.add_argument(
-        "-o", "--output", default="audit.docx", help="输出 docx 路径"
+        "-o", "--output-dir", default=".", help="截图文件输出目录（默认当前目录）"
+    )
+    parser.add_argument(
+        "--pkg-name", default=None, help="文件名前缀（包名），默认取项目路径末段"
     )
     parser.add_argument(
         "--viewport", default="1440x900", help="视口尺寸，格式 WxH"
@@ -176,7 +174,8 @@ def main() -> int:
     executable_arg = args.executable_path or cfg_file.get("executable_path")
     baseline_tag_val = args.baseline_tag or cfg_file.get("baseline_tag") or "20250901_Release"
     release_tag_val = args.release_tag or cfg_file.get("release_tag")
-    output_val = args.output if args.output != "audit.docx" else cfg_file.get("output", "audit.docx")
+    output_dir_val = args.output_dir if args.output_dir != "." else cfg_file.get("output_dir", ".")
+    pkg_name_val = args.pkg_name or cfg_file.get("pkg_name")
 
     # 3. 解析视口 WxH（配置文件可覆盖默认值）
     viewport_str = cfg_file.get("viewport", args.viewport)
@@ -200,7 +199,8 @@ def main() -> int:
         image_format=cfg_file.get("format", args.format),
         quality=cfg_file.get("quality", args.quality),
         dpi=cfg_file.get("dpi", args.dpi),
-        output_path=output_val,
+        output_dir=output_dir_val,
+        pkg_name=pkg_name_val,
         continuous=cfg_file.get("continuous", args.continuous),
         margin_inches=cfg_file.get("margin", args.margin),
         branches=args.branch or [],
@@ -276,14 +276,17 @@ def main() -> int:
             print(f"错误：GitLab 网页登录失败（{exc}）")
             return 5
 
-        # 9. 创建临时目录
+        # 9. 准备输出目录与包名
+        output_dir = Path(config.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pkg_name = config.pkg_name or config.project_path.rstrip("/").split("/")[-1]
+        print(f"输出目录：{output_dir}，包名前缀：{pkg_name}")
+        total_saved = 0
+
+        # 临时目录（capture_page 中间产物，save_images 会移动走）
         tmp_dir = Path(tempfile.mkdtemp(prefix="gitlabshot_"))
 
-        # 10. 初始化文档内容
-        content = DocContent()
-
-        # 11. 主线截图章（master 分支，仓库根 URL，整页滚动）
-        master_subsections: list[SubSection] = []
+        # 10. 主线截图（master 分支，仓库根 URL，整页滚动）
         print(f"正在截图主线 {default_branch}...")
         master_url = f"{config.base_url}/{config.project_path}"
         try:
@@ -291,19 +294,11 @@ def main() -> int:
         except NavigationError as exc:
             print(f"警告：{exc}，已跳过")
             master_imgs = []
-        if master_imgs:
-            master_subsections.append(
-                SubSection(title=default_branch, images=master_imgs)
-            )
-        if master_subsections:
-            content.chapters.append(
-                Chapter(title="主线", subsections=master_subsections)
-            )
+        total_saved += len(save_images(master_imgs, output_dir, pkg_name, "master"))
 
-        # 12. 送测产品基线版本章
+        # 11. 送测产品基线版本截图
         # 取 baseline_tag 的 commit A，再取 A 之后（newer）第 2 个 commit C，
         # 用 C 打开 /-/commits/C，页面显示 C、中间 commit、A 前3个提交
-        baseline_subsections: list[SubSection] = []
         baseline_target_sha = None
         baseline_label = ""
         try:
@@ -356,20 +351,13 @@ def main() -> int:
                         except NavigationError as exc:
                             print(f"警告：{exc}，已跳过")
                             imgs = []
-                        if imgs:
-                            baseline_subsections.append(
-                                SubSection(title=baseline_label, images=imgs)
-                            )
+                        total_saved += len(
+                            save_images(imgs, output_dir, pkg_name, "baseline")
+                        )
                     else:
                         print(f"警告：无法获取 {baseline_label} 之后的 commit，跳过产品基线")
 
-        if baseline_subsections:
-            content.chapters.append(
-                Chapter(title="送测产品基线版本", subsections=baseline_subsections)
-            )
-
-        # 13. 送测产品版本发布时间章（只截配置的 release_tag）
-        release_subsections: list[SubSection] = []
+        # 12. 送测产品版本发布时间截图（只截配置的 release_tag）
         if config.release_tag:
             print(f"正在截图版本发布时间 {config.release_tag}...")
             url = (
@@ -384,18 +372,11 @@ def main() -> int:
             except NavigationError as exc:
                 print(f"警告：{exc}，已跳过")
                 imgs = []
-            if imgs:
-                release_subsections.append(
-                    SubSection(title=config.release_tag, images=imgs)
-                )
+            total_saved += len(save_images(imgs, output_dir, pkg_name, "release"))
         else:
-            print("提示：未配置 release_tag，跳过版本发布时间章")
-        if release_subsections:
-            content.chapters.append(
-                Chapter(title="送测产品版本发布时间", subsections=release_subsections)
-            )
+            print("提示：未配置 release_tag，跳过版本发布时间截图")
 
-        # 14. 送测产品版本标签章（/-/tags，截第一页）
+        # 13. 送测产品版本标签截图（/-/tags，截第一页）
         tags_list_url = f"{config.base_url}/{config.project_path}/-/tags"
         print("正在截图版本标签列表...")
         try:
@@ -403,15 +384,9 @@ def main() -> int:
         except NavigationError as exc:
             print(f"警告：{exc}，已跳过")
             tags_imgs = []
-        if tags_imgs:
-            content.chapters.append(
-                Chapter(
-                    title="送测产品版本标签",
-                    subsections=[SubSection(title="", images=tags_imgs)],
-                )
-            )
+        total_saved += len(save_images(tags_imgs, output_dir, pkg_name, "tag"))
 
-        # 15. 分支截图章（排除 master 与 tags 的其它分支）
+        # 14. 分支截图（排除 master 的其它分支）
         if config.branches:
             branches = config.branches
         else:
@@ -420,9 +395,8 @@ def main() -> int:
             except APIError as exc:
                 print(f"警告：API 调用失败（{exc}），跳过对应内容")
                 branches = []
-        # 排除 master（已在主线章截取）
+        # 排除 master（已在主线截取）
         other_branches = [b for b in branches if b != default_branch]
-        branch_subsections: list[SubSection] = []
         for branch in other_branches:
             print(f"正在截图分支 {branch}...")
             url = (
@@ -434,33 +408,21 @@ def main() -> int:
             except NavigationError as exc:
                 print(f"警告：{exc}，已跳过")
                 continue
-            if imgs:
-                branch_subsections.append(SubSection(title=branch, images=imgs))
-        if branch_subsections:
-            content.chapters.append(
-                Chapter(title="分支", subsections=branch_subsections)
-            )
+            total_saved += len(save_images(imgs, output_dir, pkg_name, branch))
 
-        # 16. 关闭浏览器
+        # 15. 关闭浏览器
         try:
             browser.close()
         except Exception:
             pass
 
-        # 17. 检查是否有截图
-        if not content.chapters:
+        # 16. 检查是否有截图
+        if total_saved == 0:
             print("错误：未捕获到任何截图")
             return 3
 
-        # 18. 生成文档
-        try:
-            build_docx(content, config.output_path, config)
-        except Exception as exc:
-            print(f"警告：文档生成失败（{exc}）")
-            return 2
-
-        # 19. 成功
-        print(f"已生成文档：{config.output_path}")
+        # 17. 成功
+        print(f"完成，共保存 {total_saved} 张截图到 {output_dir}")
         return 0
     finally:
         if tmp_dir is not None:

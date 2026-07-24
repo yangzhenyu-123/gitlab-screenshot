@@ -26,6 +26,8 @@ class Config:
 
     # ---- 文档 ----
     output_path: str = "audit.docx"
+    output_dir: str = "."          # 截图文件输出目录
+    pkg_name: Optional[str] = None  # 文件名前缀（包名），默认取项目路径末段
     continuous: bool = False
     margin_inches: float = 0.5
 
