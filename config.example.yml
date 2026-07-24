@@ -1,0 +1,54 @@
+# GitLab 仓库审计截图工具 配置文件示例
+# 用法：gitlabshot --config config.yml
+# 命令行参数优先级高于配置文件中的同名项
+
+# GitLab 项目地址（必填，命令行位置参数或此处指定）
+project_url: "https://gitlab.linx-info.cd/linxos-v8/code/opensource/baseos/security-facility/httpd"
+
+# Personal Access Token（必填，或用环境变量 GITLABSHOT_TOKEN）
+# 建议用环境变量，避免明文写入配置文件
+token: ""
+
+# 送测产品基线 tag：取其 commit A，再取 A 之后第 2 个 commit C，
+# 截图 https://<仓库路径>/-/commits/C
+baseline_tag: "20250901_Release"
+
+# 送测产品版本发布标签：截图 https://<仓库路径>/-/commits/<release_tag>
+release_tag: "20260622_Release"
+
+# 网页登录回退凭证（token 网页认证失败时用用户名+密码表单登录）
+# 建议用环境变量 GITLABSHOT_USERNAME / GITLABSHOT_PASSWORD
+username: ""
+password: ""
+
+# Chromium 可执行文件路径（内网通常指定系统 Chromium）
+executable_path: "/usr/bin/google-chrome"
+
+# 输出 docx 路径
+output: "audit.docx"
+
+# 视口尺寸（宽x高），影响每屏截图高度
+viewport: "1440x900"
+
+# 每屏滚动后等待毫秒（等待懒加载/动画）
+wait: 800
+
+# 分支文件树等长页面最大截图屏数
+max_screens: 20
+
+# 版本发布时间/产品基线 commits 页面截图屏数（1 屏约 3-5 个提交）
+commit_screens: 1
+
+# 图片格式与质量
+format: "png"
+quality: 85
+dpi: 96
+
+# 页面边距（英寸）
+margin: 0.5
+
+# 是否保留 GitLab 固定导航栏/侧边栏（默认隐藏）
+keep_fixed: false
+
+# 同一子节内多张截图是否连续排列（默认每张分页）
+continuous: false

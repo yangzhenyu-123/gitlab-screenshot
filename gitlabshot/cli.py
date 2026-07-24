@@ -75,6 +75,11 @@ def main() -> int:
     )
     parser.add_argument("project_url", nargs="?", help="GitLab 项目地址")
     parser.add_argument(
+        "--config",
+        default=None,
+        help="YAML 配置文件路径（提供 project_url/token/baseline_tag/release_tag 等）",
+    )
+    parser.add_argument(
         "--token",
         default=None,
         help="Personal Access Token（或环境变量 GITLABSHOT_TOKEN）",
@@ -116,8 +121,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--baseline-tag",
-        default="20250901_Release",
-        help="产品基线参考标签（存在则取其 commit 及后2个；不存在则用初始提交后2个）",
+        default=None,
+        help="产品基线参考标签（取其 commit A 后第2个 commit C 截图）；可由配置文件提供",
+    )
+    parser.add_argument(
+        "--release-tag",
+        default=None,
+        help="送测产品版本发布标签（截图 /-/commits/<release_tag>）；可由配置文件提供",
     )
     parser.add_argument(
         "--commit-screens",
@@ -138,53 +148,80 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # 1. 校验必填：project_url 与 token（参数 + 环境变量）
-    token = args.token or os.environ.get("GITLABSHOT_TOKEN")
-    if not args.project_url or not token:
+    # 1. 加载配置文件（若指定），命令行参数优先
+    from gitlabshot.config_loader import load_config_file, ConfigFileError
+
+    cfg_file: dict = {}
+    if args.config:
+        try:
+            cfg_file = load_config_file(args.config)
+        except ConfigFileError as exc:
+            print(f"错误：{exc}")
+            return 1
+
+    # 2. 解析必填项：project_url 与 token（命令行 > 配置文件 > 环境变量）
+    project_url = args.project_url or cfg_file.get("project_url")
+    token = (
+        args.token
+        or cfg_file.get("token")
+        or os.environ.get("GITLABSHOT_TOKEN")
+    )
+    if not project_url or not token:
+        print("错误：缺少 project_url 或 token（可通过命令行、配置文件或环境变量提供）")
         parser.print_help()
         return 1
 
-    # 网页登录回退凭证（可选）
-    username_arg = args.username or os.environ.get("GITLABSHOT_USERNAME")
-    password_arg = args.password or os.environ.get("GITLABSHOT_PASSWORD")
+    # 网页登录回退凭证（可选）：命令行 > 配置文件 > 环境变量
+    username_arg = (
+        args.username or cfg_file.get("username") or os.environ.get("GITLABSHOT_USERNAME")
+    )
+    password_arg = (
+        args.password or cfg_file.get("password") or os.environ.get("GITLABSHOT_PASSWORD")
+    )
+    executable_arg = args.executable_path or cfg_file.get("executable_path")
+    baseline_tag_val = args.baseline_tag or cfg_file.get("baseline_tag") or "20250901_Release"
+    release_tag_val = args.release_tag or cfg_file.get("release_tag")
+    output_val = args.output if args.output != "audit.docx" else cfg_file.get("output", "audit.docx")
 
-    # 2. 解析视口 WxH
+    # 3. 解析视口 WxH（配置文件可覆盖默认值）
+    viewport_str = cfg_file.get("viewport", args.viewport)
     try:
-        w_str, h_str = args.viewport.split("x")
+        w_str, h_str = str(viewport_str).split("x")
         viewport_width = int(w_str)
         viewport_height = int(h_str)
     except (ValueError, AttributeError):
-        print(f"错误：视口格式无效：{args.viewport}（应为 WxH，如 1440x900）")
+        print(f"错误：视口格式无效：{viewport_str}（应为 WxH，如 1440x900）")
         return 1
 
-    # 3. 构建 Config
+    # 4. 构建 Config
     config = Config(
-        project_url=args.project_url,
+        project_url=project_url,
         token=token,
         viewport_width=viewport_width,
         viewport_height=viewport_height,
-        wait_ms=args.wait,
-        max_screens=args.max_screens,
-        keep_fixed=args.keep_fixed,
-        image_format=args.format,
-        quality=args.quality,
-        dpi=args.dpi,
-        output_path=args.output,
-        continuous=args.continuous,
-        margin_inches=args.margin,
+        wait_ms=cfg_file.get("wait", args.wait),
+        max_screens=cfg_file.get("max_screens", args.max_screens),
+        keep_fixed=cfg_file.get("keep_fixed", args.keep_fixed),
+        image_format=cfg_file.get("format", args.format),
+        quality=cfg_file.get("quality", args.quality),
+        dpi=cfg_file.get("dpi", args.dpi),
+        output_path=output_val,
+        continuous=cfg_file.get("continuous", args.continuous),
+        margin_inches=cfg_file.get("margin", args.margin),
         branches=args.branch or [],
         context_tag=args.context_tag,
         context_direction=args.context_direction,
-        executable_path=args.executable_path,
-        baseline_tag=args.baseline_tag,
+        executable_path=executable_arg,
+        baseline_tag=baseline_tag_val,
+        release_tag=release_tag_val,
         commit_max_screens=args.commit_screens,
         username=username_arg,
         password=password_arg,
     )
 
-    # 4. 解析项目地址并填入 config
+    # 5. 解析项目地址并填入 config
     try:
-        base_url, project_path, url_encoded_path = parse_project_url(args.project_url)
+        base_url, project_path, url_encoded_path = parse_project_url(config.project_url)
     except Exception as exc:
         print(f"错误：项目地址解析失败：{exc}")
         return 1
@@ -280,92 +317,33 @@ def main() -> int:
         # 10. 初始化文档内容
         content = DocContent()
 
-        # 11. 分支文件树章
-        if config.branches:
-            branches = config.branches
-        else:
-            try:
-                branches = client.list_branches(project_id)
-            except APIError as exc:
-                print(f"警告：API 调用失败（{exc}），跳过对应内容")
-                branches = []
-        branch_subsections: list[SubSection] = []
-        for branch in branches:
-            print(f"正在截图分支 {branch}...")
-            # master（默认分支）用仓库根 URL，其它分支用 /-/tree/<branch>
-            if branch == default_branch:
-                url = f"{config.base_url}/{config.project_path}"
-            else:
-                url = (
-                    f"{config.base_url}/{config.project_path}/-/tree/"
-                    f"{urllib.parse.quote(branch, safe='')}"
-                )
-            try:
-                imgs = capture_page(page, url, config, tmp_dir)
-            except NavigationError:
-                print(f"警告：页面 {url} 截图失败，已跳过")
-                continue
-            if imgs:
-                branch_subsections.append(SubSection(title=branch, images=imgs))
-        if branch_subsections:
-            content.chapters.append(
-                Chapter(title="分支文件树", subsections=branch_subsections)
-            )
-
-        # 12. 版本标签列表章（/-/tags，截第一页）
-        tags_list_url = f"{config.base_url}/{config.project_path}/-/tags"
-        print("正在截图版本标签列表...")
+        # 11. 主线截图章（master 分支，仓库根 URL，整页滚动）
+        master_subsections: list[SubSection] = []
+        print(f"正在截图主线 {default_branch}...")
+        master_url = f"{config.base_url}/{config.project_path}"
         try:
-            tags_imgs = capture_page(page, tags_list_url, config, tmp_dir)
+            master_imgs = capture_page(page, master_url, config, tmp_dir)
         except NavigationError:
-            print(f"警告：页面 {tags_list_url} 截图失败，已跳过")
-            tags_imgs = []
-        if tags_imgs:
+            print(f"警告：页面 {master_url} 截图失败，已跳过")
+            master_imgs = []
+        if master_imgs:
+            master_subsections.append(
+                SubSection(title=default_branch, images=master_imgs)
+            )
+        if master_subsections:
             content.chapters.append(
-                Chapter(
-                    title="版本标签列表",
-                    subsections=[SubSection(title="", images=tags_imgs)],
-                )
+                Chapter(title="主线", subsections=master_subsections)
             )
 
-        # 13. 版本发布时间章（每个 tag 的 /-/commits/<tag>，只截一屏取前几个提交）
-        try:
-            tags = client.list_tags(project_id)
-        except APIError as exc:
-            print(f"警告：API 调用失败（{exc}），跳过对应内容")
-            tags = []
-        release_subsections: list[SubSection] = []
-        for tag_name, commit_sha in tags:
-            print(f"正在截图版本发布时间 {tag_name}...")
-            url = (
-                f"{config.base_url}/{config.project_path}/-/commits/"
-                f"{urllib.parse.quote(tag_name, safe='')}"
-            )
-            try:
-                imgs = capture_page(
-                    page, url, config, tmp_dir,
-                    max_screens=config.commit_max_screens,
-                )
-            except NavigationError:
-                print(f"警告：页面 {url} 截图失败，已跳过")
-                continue
-            if imgs:
-                release_subsections.append(SubSection(title=tag_name, images=imgs))
-        if release_subsections:
-            content.chapters.append(
-                Chapter(title="版本发布时间", subsections=release_subsections)
-            )
-
-        # 14. 产品基线章
-        # 情况1：存在 config.baseline_tag 标签 → 取其 commit A → 取 A 之后（newer）2 个 commit，
-        #        用较新的那个打开 /-/commits/<sha>，页面显示该 commit、中间 commit、A（前3个提交）
-        # 情况2：不存在该标签 → 取初始提交(root)之后 2 个 commit，用较新的打开 /-/commits/<sha>
+        # 12. 送测产品基线版本章
+        # 取 baseline_tag 的 commit A，再取 A 之后（newer）第 2 个 commit C，
+        # 用 C 打开 /-/commits/C，页面显示 C、中间 commit、A 前3个提交
         baseline_subsections: list[SubSection] = []
         baseline_target_sha = None
         baseline_label = ""
         try:
             baseline_target_sha = client.get_tag_commit(project_id, config.baseline_tag)
-            baseline_label = f"{config.baseline_tag} 的 commit"
+            baseline_label = config.baseline_tag
             baseline_mode = "tag"
         except TagNotFoundError:
             baseline_mode = "root"
@@ -398,7 +376,7 @@ def main() -> int:
                         commits, baseline_target_sha, "newer", count=2,
                     )
                     if context_shas:
-                        # 用较新的那个（列表最后一个，最远离 target=最新）打开 commits 页
+                        # 用第 2 个（较新、最远离 target）打开 commits 页
                         open_sha = context_shas[-1]
                         print(f"正在截图产品基线 commits/{open_sha[:8]}...")
                         url = (
@@ -422,28 +400,101 @@ def main() -> int:
 
         if baseline_subsections:
             content.chapters.append(
-                Chapter(title="产品基线", subsections=baseline_subsections)
+                Chapter(title="送测产品基线版本", subsections=baseline_subsections)
             )
 
-        # 15. 关闭浏览器
+        # 13. 送测产品版本发布时间章（只截配置的 release_tag）
+        release_subsections: list[SubSection] = []
+        if config.release_tag:
+            print(f"正在截图版本发布时间 {config.release_tag}...")
+            url = (
+                f"{config.base_url}/{config.project_path}/-/commits/"
+                f"{urllib.parse.quote(config.release_tag, safe='')}"
+            )
+            try:
+                imgs = capture_page(
+                    page, url, config, tmp_dir,
+                    max_screens=config.commit_max_screens,
+                )
+            except NavigationError:
+                print(f"警告：页面 {url} 截图失败，已跳过")
+                imgs = []
+            if imgs:
+                release_subsections.append(
+                    SubSection(title=config.release_tag, images=imgs)
+                )
+        else:
+            print("提示：未配置 release_tag，跳过版本发布时间章")
+        if release_subsections:
+            content.chapters.append(
+                Chapter(title="送测产品版本发布时间", subsections=release_subsections)
+            )
+
+        # 14. 送测产品版本标签章（/-/tags，截第一页）
+        tags_list_url = f"{config.base_url}/{config.project_path}/-/tags"
+        print("正在截图版本标签列表...")
+        try:
+            tags_imgs = capture_page(page, tags_list_url, config, tmp_dir)
+        except NavigationError:
+            print(f"警告：页面 {tags_list_url} 截图失败，已跳过")
+            tags_imgs = []
+        if tags_imgs:
+            content.chapters.append(
+                Chapter(
+                    title="送测产品版本标签",
+                    subsections=[SubSection(title="", images=tags_imgs)],
+                )
+            )
+
+        # 15. 分支截图章（排除 master 与 tags 的其它分支）
+        if config.branches:
+            branches = config.branches
+        else:
+            try:
+                branches = client.list_branches(project_id)
+            except APIError as exc:
+                print(f"警告：API 调用失败（{exc}），跳过对应内容")
+                branches = []
+        # 排除 master（已在主线章截取）
+        other_branches = [b for b in branches if b != default_branch]
+        branch_subsections: list[SubSection] = []
+        for branch in other_branches:
+            print(f"正在截图分支 {branch}...")
+            url = (
+                f"{config.base_url}/{config.project_path}/-/tree/"
+                f"{urllib.parse.quote(branch, safe='')}"
+            )
+            try:
+                imgs = capture_page(page, url, config, tmp_dir)
+            except NavigationError:
+                print(f"警告：页面 {url} 截图失败，已跳过")
+                continue
+            if imgs:
+                branch_subsections.append(SubSection(title=branch, images=imgs))
+        if branch_subsections:
+            content.chapters.append(
+                Chapter(title="分支", subsections=branch_subsections)
+            )
+
+        # 16. 关闭浏览器
         try:
             browser.close()
         except Exception:
             pass
 
-        # 16. 检查是否有截图
+        # 17. 检查是否有截图
         if not content.chapters:
             print("错误：未捕获到任何截图")
             return 3
 
-        # 17. 生成文档
+        # 18. 生成文档
         try:
             build_docx(content, config.output_path, config)
         except Exception as exc:
             print(f"警告：文档生成失败（{exc}）")
             return 2
 
-        # 18. 成功
+        # 19. 成功
         print(f"已生成文档：{config.output_path}")
         return 0
     finally:
