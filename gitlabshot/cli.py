@@ -26,12 +26,7 @@ from gitlabshot.gitlab_api import (
     InvalidTokenError,
     TagNotFoundError,
 )
-from gitlabshot.gitlab_auth import (
-    LoginError,
-    establish_session_basic,
-    establish_session_form,
-    verify_session,
-)
+from gitlabshot.gitlab_auth import LoginError, establish_session_form
 from gitlabshot.capture import (
     ChromiumMissingError,
     NavigationError,
@@ -253,63 +248,33 @@ def main() -> int:
     default_branch = project["default_branch"]
     print(f"项目 ID：{project_id}，默认分支：{default_branch}")
 
-    # 7. 启动浏览器（带 HTTP Basic Auth 凭证，避免表单登录）
-    #     GitLab 支持 oauth2 + PAT 通过 Basic Auth 访问受保护页面
-    from urllib.parse import urlsplit as _urlsplit
-
-    _base_parts = _urlsplit(config.base_url)
-    _origin = f"{_base_parts.scheme}://{_base_parts.netloc}"
-    _http_credentials = {
-        "username": "oauth2",
-        "password": config.token,
-        "origin": _origin,
-    }
+    # 7. 启动浏览器（网页会话改用用户名+密码表单登录）
     try:
-        browser, context, page = launch_browser(config, _http_credentials)
+        browser, context, page = launch_browser(config)
     except ChromiumMissingError as exc:
         print(f"错误：Chromium 不可用（{exc}）")
         return 4
 
+    # 网页登录需要用户名+密码（token 方式的网页认证已确认不可用）
+    if not (config.username and config.password):
+        print(
+            "错误：网页登录需要用户名与密码（token 仅用于 API）。"
+            "请通过 --username/--password 或环境变量 "
+            "GITLABSHOT_USERNAME/GITLABSHOT_PASSWORD 或配置文件提供。"
+        )
+        return 1
+
     tmp_dir = None
     try:
-        # 8. 建立网页会话：优先 private_token URL 认证（最可靠），
-        #    Basic Auth 凭证已在创建 context 时注入，
-        #    均失败则回退表单登录
-        session_ok = False
+        # 8. 建立网页会话：用户名+密码表单登录
         try:
-            establish_session_basic(context, config.base_url, config.token)
-            if verify_session(
-                page, config.base_url, config.project_path, config.token
-            ):
-                session_ok = True
-                print("GitLab 网页会话建立成功（private_token / Basic Auth）")
-        except Exception as exc:
-            print(f"警告：private_token / Basic Auth 方式失败（{exc}），尝试表单登录回退")
-
-        if not session_ok:
-            # token 网页认证失败：优先用提供的用户名+密码表单登录
-            if config.username and config.password:
-                login_user = config.username
-                login_pass = config.password
-                cred_kind = "password"
-            else:
-                login_user = config.username or username  # 显式用户名优先，否则用 API 获取的
-                login_pass = config.token
-                cred_kind = "token"
-            try:
-                establish_session_form(
-                    page, config.base_url, login_user, login_pass, cred_kind
-                )
-                print(f"GitLab 网页登录成功（表单登录，{cred_kind}）")
-            except LoginError as exc:
-                print(f"错误：GitLab 网页登录失败（{exc}）")
-                if cred_kind == "token":
-                    print(
-                        "提示：当前用 token 作为表单密码登录失败。"
-                        "请设置环境变量 GITLABSHOT_USERNAME 与 GITLABSHOT_PASSWORD"
-                        "（或加 --username/--password 参数）用账号密码登录。"
-                    )
-                return 5
+            establish_session_form(
+                page, config.base_url, config.username, config.password, "password"
+            )
+            print("GitLab 网页登录成功（用户名+密码表单登录）")
+        except LoginError as exc:
+            print(f"错误：GitLab 网页登录失败（{exc}）")
+            return 5
 
         # 9. 创建临时目录
         tmp_dir = Path(tempfile.mkdtemp(prefix="gitlabshot_"))

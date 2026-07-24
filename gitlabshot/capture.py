@@ -15,14 +15,8 @@ class ChromiumMissingError(Exception):
     """Chromium 浏览器不可用或未正确安装。"""
 
 
-def launch_browser(config: Config, http_credentials=None):
-    """启动 Chromium 浏览器，返回 (browser, context, page)。
-
-    http_credentials: 可选 dict，形如
-        {"username": "oauth2", "password": "<token>", "origin": "https://host"}
-        传入时浏览器对所有匹配 origin 的请求自动附带 HTTP Basic Auth header，
-        用于访问需要认证的 GitLab 页面（避免表单登录）。
-    """
+def launch_browser(config: Config):
+    """启动 Chromium 浏览器，返回 (browser, context, page)。"""
     pw = sync_playwright().start()
     launch_kwargs = {
         "headless": True,
@@ -41,21 +35,18 @@ def launch_browser(config: Config, http_credentials=None):
             "请执行 playwright install chromium 或设置 PLAYWRIGHT_BROWSERS_PATH"
         )
 
-    context_kwargs = {
-        "viewport": {
+    context = browser.new_context(
+        viewport={
             "width": config.viewport_width,
             "height": config.viewport_height,
         },
-        "ignore_https_errors": config.ignore_https_errors,
-        "user_agent": (
+        ignore_https_errors=config.ignore_https_errors,
+        user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         ),
-    }
-    if http_credentials is not None:
-        context_kwargs["http_credentials"] = http_credentials
-    context = browser.new_context(**context_kwargs)
+    )
     context.add_init_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => false})"
     )
@@ -69,25 +60,13 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
     max_screens: 可选，覆盖 config.max_screens。用于 commits 类页面（版本发布
     时间、产品基线）只截前几屏（前几个提交），传 1 即只截一屏。
     """
-    # a. 导航到目标 URL（附加 private_token 参数，用于网页认证）
-    #    GitLab 网页端识别 ?private_token=TOKEN 并据此建立会话视图，
-    #    对内网禁用 Basic Auth / 表单 PAT 登录的场景尤为关键。
-    from urllib.parse import urlsplit, urlunsplit, urlencode
-
+    # a. 导航到目标 URL（网页会话由表单登录的 cookie 维持）
     if max_screens is None:
         max_screens = config.max_screens
 
-    parts = urlsplit(url)
-    display_url = url  # 保留原始 URL（不含 private_token）用于地址栏显示
-    if config.token:
-        existing = parts.query
-        extra = urlencode({"private_token": config.token})
-        new_query = f"{existing}&{extra}" if existing else extra
-        url = urlunsplit(
-            (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
-        )
+    display_url = url
 
-    # 打印仓库地址之后的完整路径，便于确认（用不含 token 的 display_url）
+    # 打印仓库地址之后的完整路径，便于确认
     print(f"  访问路径：{display_url}")
 
     try:
