@@ -206,15 +206,19 @@ def main() -> int:
 
     tmp_dir = None
     try:
-        # 8. 建立网页会话：优先 Basic Auth（访问受保护页面验证），失败回退表单登录
+        # 8. 建立网页会话：优先 private_token URL 认证（最可靠），
+        #    Basic Auth 凭证已在创建 context 时注入，
+        #    均失败则回退表单登录
         session_ok = False
         try:
             establish_session_basic(context, config.base_url, config.token)
-            if verify_session(page, config.base_url, config.project_path):
+            if verify_session(
+                page, config.base_url, config.project_path, config.token
+            ):
                 session_ok = True
-                print("GitLab 网页会话建立成功（HTTP Basic Auth）")
+                print("GitLab 网页会话建立成功（private_token / Basic Auth）")
         except Exception as exc:
-            print(f"警告：Basic Auth 方式失败（{exc}），尝试表单登录回退")
+            print(f"警告：private_token / Basic Auth 方式失败（{exc}），尝试表单登录回退")
 
         if not session_ok:
             try:

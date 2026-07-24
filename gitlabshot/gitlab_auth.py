@@ -125,14 +125,28 @@ def establish_session_form(page: Any, base_url: str, username: str, token: str) 
     logger.info("GitLab 表单登录成功")
 
 
-def verify_session(page: Any, base_url: str, project_path: str) -> bool:
+def verify_session(page: Any, base_url: str, project_path: str, token: str) -> bool:
     """验证会话是否可访问受保护页面。
 
-    访问项目根页面，若未被重定向到 /users/sign_in 则视为会话有效。
-    返回 True 表示可访问，False 表示需要登录。
+    访问带 ?private_token=TOKEN 的项目根页面，若未被重定向到 /users/sign_in
+    则视为会话有效。返回 True 表示可访问，False 表示需要登录。
+
+    private_token 是 GitLab 网页端官方支持的 PAT 认证方式之一，对禁用
+    Basic Auth / 表单 PAT 登录的内网实例尤其关键。
     """
+    from urllib.parse import urlsplit, urlunsplit, urlencode
+
     base = base_url.rstrip("/")
     probe_url = f"{base}/{project_path}"
+    if token:
+        parts = urlsplit(probe_url)
+        extra = urlencode({"private_token": token})
+        new_query = (
+            f"{parts.query}&{extra}" if parts.query else extra
+        )
+        probe_url = urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
+        )
     timeout_error = _playwright_timeout_error()
     try:
         page.goto(probe_url, wait_until="domcontentloaded")

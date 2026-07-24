@@ -65,7 +65,20 @@ def launch_browser(config: Config, http_credentials=None):
 
 def capture_page(page, url: str, config: Config, tmp_dir) -> list:
     """对指定 URL 逐视口截图，返回截图文件 Path 列表。tmp_dir 是 pathlib.Path。"""
-    # a. 导航到目标 URL
+    # a. 导航到目标 URL（附加 private_token 参数，用于网页认证）
+    #    GitLab 网页端识别 ?private_token=TOKEN 并据此建立会话视图，
+    #    对内网禁用 Basic Auth / 表单 PAT 登录的场景尤为关键。
+    from urllib.parse import urlsplit, urlunsplit, urlencode
+
+    parts = urlsplit(url)
+    if config.token:
+        existing = parts.query
+        extra = urlencode({"private_token": config.token})
+        new_query = f"{existing}&{extra}" if existing else extra
+        url = urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
+        )
+
     try:
         page.goto(url, wait_until="networkidle")
     except PlaywrightError as e:
