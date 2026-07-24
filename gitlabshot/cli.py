@@ -26,7 +26,12 @@ from gitlabshot.gitlab_api import (
     InvalidTokenError,
     TagNotFoundError,
 )
-from gitlabshot.gitlab_auth import LoginError, establish_session
+from gitlabshot.gitlab_auth import (
+    LoginError,
+    establish_session_basic,
+    establish_session_form,
+    verify_session,
+)
 from gitlabshot.capture import (
     ChromiumMissingError,
     NavigationError,
@@ -182,22 +187,44 @@ def main() -> int:
     default_branch = project["default_branch"]
     print(f"项目 ID：{project_id}，默认分支：{default_branch}")
 
-    # 7. 启动浏览器
+    # 7. 启动浏览器（带 HTTP Basic Auth 凭证，避免表单登录）
+    #     GitLab 支持 oauth2 + PAT 通过 Basic Auth 访问受保护页面
+    from urllib.parse import urlsplit as _urlsplit
+
+    _base_parts = _urlsplit(config.base_url)
+    _origin = f"{_base_parts.scheme}://{_base_parts.netloc}"
+    _http_credentials = {
+        "username": "oauth2",
+        "password": config.token,
+        "origin": _origin,
+    }
     try:
-        browser, context, page = launch_browser(config)
+        browser, context, page = launch_browser(config, _http_credentials)
     except ChromiumMissingError as exc:
         print(f"错误：Chromium 不可用（{exc}）")
         return 4
 
     tmp_dir = None
     try:
-        # 8. 建立网页会话
+        # 8. 建立网页会话：优先 Basic Auth（访问受保护页面验证），失败回退表单登录
+        session_ok = False
         try:
-            establish_session(page, config.base_url, username, config.token)
-        except LoginError:
-            print("错误：GitLab 网页登录失败")
-            return 5
-        print("GitLab 网页登录成功")
+            establish_session_basic(context, config.base_url, config.token)
+            if verify_session(page, config.base_url, config.project_path):
+                session_ok = True
+                print("GitLab 网页会话建立成功（HTTP Basic Auth）")
+        except Exception as exc:
+            print(f"警告：Basic Auth 方式失败（{exc}），尝试表单登录回退")
+
+        if not session_ok:
+            try:
+                establish_session_form(
+                    page, config.base_url, username, config.token
+                )
+                print("GitLab 网页登录成功（表单登录）")
+            except LoginError as exc:
+                print(f"错误：GitLab 网页登录失败（{exc}）")
+                return 5
 
         # 9. 创建临时目录
         tmp_dir = Path(tempfile.mkdtemp(prefix="gitlabshot_"))

@@ -15,8 +15,14 @@ class ChromiumMissingError(Exception):
     """Chromium 浏览器不可用或未正确安装。"""
 
 
-def launch_browser(config: Config):
-    """启动 Chromium 浏览器，返回 (browser, context, page)。"""
+def launch_browser(config: Config, http_credentials=None):
+    """启动 Chromium 浏览器，返回 (browser, context, page)。
+
+    http_credentials: 可选 dict，形如
+        {"username": "oauth2", "password": "<token>", "origin": "https://host"}
+        传入时浏览器对所有匹配 origin 的请求自动附带 HTTP Basic Auth header，
+        用于访问需要认证的 GitLab 页面（避免表单登录）。
+    """
     pw = sync_playwright().start()
     launch_kwargs = {
         "headless": True,
@@ -35,18 +41,21 @@ def launch_browser(config: Config):
             "请执行 playwright install chromium 或设置 PLAYWRIGHT_BROWSERS_PATH"
         )
 
-    context = browser.new_context(
-        viewport={
+    context_kwargs = {
+        "viewport": {
             "width": config.viewport_width,
             "height": config.viewport_height,
         },
-        ignore_https_errors=config.ignore_https_errors,
-        user_agent=(
+        "ignore_https_errors": config.ignore_https_errors,
+        "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         ),
-    )
+    }
+    if http_credentials is not None:
+        context_kwargs["http_credentials"] = http_credentials
+    context = browser.new_context(**context_kwargs)
     context.add_init_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => false})"
     )
