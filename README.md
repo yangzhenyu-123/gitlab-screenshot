@@ -10,7 +10,7 @@
 
 - **5 类审计章节**：主线 / 送测产品基线版本 / 送测产品版本发布时间 / 送测产品版本标签 / 分支
 - **YAML 配置文件**：通过 `--config` 集中管理项目地址、token、基线 tag、发布标签等，命令行参数优先级更高
-- **Token + 用户名密码回退认证**：API 用 PAT；网页会话优先 `private_token` URL 参数 + Basic Auth，失败回退用户名+密码表单登录
+- **Token + 用户名密码双认证**：API 用 PAT 调用；网页会话用用户名+密码表单登录（token 方式的网页认证在内网不可用，已移除）
 - **逐视口截图**：Playwright 无头 Chromium 按视口高度滚动，每屏单独保存
 - **模拟地址栏注入**：每节首屏顶部显示 URL 文本（不含 token，无 favicon）
 - **懒加载处理**：截图前移除 `loading` 属性、预滚动触发加载、等待 `networkidle`
@@ -92,18 +92,23 @@ baseline_tag: "20250901_Release"
 release_tag: "20260622_Release"
 executable_path: "/usr/bin/google-chrome"
 output: "audit.docx"
+# username/password 建议用环境变量传入，避免明文
 ```
 
 运行：
 ```bash
-export GITLABSHOT_TOKEN="glpat-xxxx"
+export GITLABSHOT_TOKEN="glpat-xxxx"        # API 认证
+export GITLABSHOT_USERNAME="yourname"       # 网页登录
+export GITLABSHOT_PASSWORD="yourpass"       # 网页登录
 gitlabshot --config config.yml
 ```
 
 ### 方式二：纯命令行
 
 ```bash
-# 基本用法（5 类章节全截）
+# 基本用法（5 类章节全截）。token 用于 API，用户名密码用于网页登录
+export GITLABSHOT_USERNAME="yourname"
+export GITLABSHOT_PASSWORD="yourpass"
 gitlabshot https://gitlab.internal/group/project \
   --token <PAT> --executable-path /usr/bin/google-chrome -o audit.docx
 
@@ -111,12 +116,6 @@ gitlabshot https://gitlab.internal/group/project \
 gitlabshot https://gitlab.internal/group/project --token <PAT> \
   --baseline-tag 20250901_Release \
   --release-tag 20260622_Release \
-  --executable-path /usr/bin/google-chrome -o audit.docx
-
-# 网页认证回退：token 方式失败时用用户名+密码
-export GITLABSHOT_USERNAME="yourname"
-export GITLABSHOT_PASSWORD="yourpass"
-gitlabshot https://gitlab.internal/group/project --token <PAT> \
   --executable-path /usr/bin/google-chrome -o audit.docx
 ```
 
@@ -132,7 +131,7 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 | `token` | Personal Access Token（建议留空用环境变量） |
 | `baseline_tag` | 送测产品基线 tag（默认 `20250901_Release`） |
 | `release_tag` | 送测产品版本发布标签 |
-| `username` / `password` | 网页登录回退凭证（建议用环境变量） |
+| `username` / `password` | 网页登录凭证（必填，建议用环境变量） |
 | `executable_path` | Chromium 路径 |
 | `output` | 输出 docx 路径 |
 | `viewport` | 视口尺寸 `WxH` |
@@ -168,10 +167,10 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 | `--dpi` | `96` | 截图 DPI 元数据 |
 | `--branch` | （空） | 指定分支（可多次传入），不传则截取所有分支 |
 | `--executable-path` | （空） | 指定系统 Chromium 路径 |
-| `--username` | （空） | 网页登录回退用户名，也可用环境变量 `GITLABSHOT_USERNAME` |
-| `--password` | （空） | 网页登录回退密码，也可用环境变量 `GITLABSHOT_PASSWORD` |
+| `--username` | （必填） | 网页登录用户名，也可用环境变量 `GITLABSHOT_USERNAME` 或配置文件 |
+| `--password` | （必填） | 网页登录密码，也可用环境变量 `GITLABSHOT_PASSWORD` 或配置文件 |
 
-\* `--token` 至少需通过命令行、配置文件或环境变量之一提供，缺失时退出码 1。
+\* `--token` 用于 API 调用，至少需通过命令行、配置文件或环境变量之一提供。`--username`/`--password` 用于网页登录，必填。缺失时退出码 1。
 
 ### 环境变量
 
@@ -189,8 +188,8 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 1. **加载配置**：读取 `--config` 指定的 YAML（可选），合并命令行参数
 2. **验证 token**：调用 `GET /api/v4/user` 携带 `PRIVATE-TOKEN`，401 则退出码 5；成功获取用户名
 3. **获取项目元数据**：`GET /projects/{url_encoded_path}` 拿到 `id` 与 `default_branch`
-4. **启动浏览器**：无头 Chromium，注入反检测脚本，`ignore_https_errors=True`，注入 Basic Auth 凭证
-5. **建立网页会话**：优先 `private_token` URL 参数 + Basic Auth 探测，失败回退用户名+密码表单登录
+4. **启动浏览器**：无头 Chromium，注入反检测脚本，`ignore_https_errors=True`
+5. **建立网页会话**：用用户名+密码提交 GitLab 登录表单，登录成功后 cookie 维持后续页面访问（token 不用于网页认证）
 6. **按 5 类章节截图**（每章为 Word 的 Heading 1）：
    - **主线**：截仓库根 URL
    - **送测产品基线版本**：取基线 tag commit A 后第2个 commit C，截 `/-/commits/C`
@@ -254,7 +253,7 @@ gitlabshot/
 ├── config.py         # Config 数据类（所有可调参数及默认值）
 ├── config_loader.py  # YAML 配置文件加载模块
 ├── gitlab_api.py     # GitLab REST API 客户端（token、项目、分支、tag、commit、root commit）
-├── gitlab_auth.py    # 网页会话建立（private_token / Basic Auth / 表单登录回退）
+├── gitlab_auth.py    # 网页会话建立（用户名+密码表单登录）
 ├── capture.py        # Playwright 逐视口截图核心（含模拟地址栏注入）
 ├── preprocess.py     # 图像 DPI 预处理
 └── docx_writer.py    # Word 文档生成
@@ -268,7 +267,7 @@ requirements.txt      # 离线 pip download 依赖清单
 ## 安全提示
 
 - **Token 脱敏**：所有日志中 token 仅显示前 4 位 + `***`，不输出完整 token
-- **截图不含 token**：注入的模拟地址栏与日志打印的访问路径均使用不含 `private_token` 的原始 URL
+- **截图不含敏感信息**：注入的模拟地址栏与日志打印的访问路径均为原始 URL，不含 token 或密码
 - **密码用环境变量**：`--username`/`--password` 建议用环境变量传入，避免出现在 shell history
 - **自签名证书**：浏览器上下文默认 `ignore_https_errors=True`，API 请求默认 `verify=False`，内网自签名证书不阻断流程
 - 如需启用 SSL 校验，修改 `Config.verify_ssl` 与 `ignore_https_errors`
