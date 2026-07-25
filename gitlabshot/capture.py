@@ -211,6 +211,8 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
 
     # h. 主截图循环：按截图高度逐屏滚动并截图
     #    每次截图前重新执行布局修正，覆盖 GitLab 运行时在滚动中重写的 inline style
+    #    第一屏截图后隐藏 GitLab 原生面包屑（sticky/fixed 不随滚动离开视口），
+    #    实现只有第一张显示面包屑
     screenshots = []
     scroll_y = 0
     page_num = 1
@@ -229,6 +231,18 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
         else:
             page.screenshot(path=str(path), full_page=False)
         screenshots.append(path)
+        # 第一屏截图后隐藏 GitLab 原生面包屑（sticky/fixed 不随滚动离开视口），
+        # 后续屏不再显示，实现只有第一张显示面包屑
+        if page_num == 1 and not config.keep_fixed:
+            page.evaluate(
+                """() => {
+                    const bc = document.querySelector(
+                        '.gl-breadcrumbs, .breadcrumbs-container, .breadcrumbs, '
+                        + '[data-testid="breadcrumb"]'
+                    );
+                    if (bc) bc.style.setProperty('display', 'none', 'important');
+                }"""
+            )
         scroll_y += shot_height
         page_num += 1
 
