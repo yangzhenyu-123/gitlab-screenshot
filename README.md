@@ -15,7 +15,7 @@
 - **逐视口截图**：Playwright 无头 Chromium 按视口高度滚动，每屏单独保存
 - **模拟地址栏注入**：每屏顶部显示 URL 文本（不含 token、无 favicon），自动剥离 query 中的 `private_token`/`token`/`access_token` 等敏感参数；通过 `body padding-top` 下移普通流内容，并用 `translateY` 下移 fixed 定位的 GitLab top-bar（含面包屑），避免地址栏遮挡
 - **懒加载处理**：截图前移除 `loading` 属性、预滚动触发加载、等待 `domcontentloaded`
-- **固定元素隐藏**：默认注入 CSS 隐藏 GitLab 左侧导航侧边栏（可 `--keep-fixed` 保留）；首屏后隐藏 fixed 定位的 GitLab 顶部栏（含面包屑），避免后续屏重复出现
+- **固定元素隐藏**：默认注入 CSS 隐藏 GitLab 左侧导航侧边栏并把内容左移铺满（可 `--keep-fixed` 保留）；tag 页面保留侧边栏展示原生布局；首屏后隐藏 fixed 定位的 GitLab 顶部栏（含面包屑），避免后续屏重复出现
 - **超长页面保护**：`--max-screens` 兜底；commits 类页面用 `--commit-screens` 限定只截前几屏（3-5 个提交）
 - **诊断友好**：每步截图前打印完整访问路径；失败时打印具体原因
 - **内网友好**：依赖支持离线安装，Chromium 可离线部署，默认忽略自签名证书错误
@@ -90,6 +90,24 @@ playwright install chromium
 
 - 序号固定两位，从 `01` 递增，上限 `99`（超过 99 张的多余截图将被忽略并警告）
 - 包名默认取项目路径末段（如 `.../httpd` → `httpd`），可用 `--pkg-name` 覆盖
+
+### 截图样式
+
+5 类截图因审计目的不同，采用不同的页面布局与截取方式：
+
+| 类型 | 模拟地址栏 | 左侧边栏 | 内容左移 | 单屏高度 | 截图屏数 | 面包屑 |
+|------|-----------|---------|---------|---------|---------|--------|
+| master | 注入 | 隐藏 | 左移至 x=48 | 视口全高 | 整页滚动 | 仅首屏 |
+| baseline | 不注入 | 隐藏 | 左移至 x=16 | 450（减半） | 1 屏 | 原生显示 |
+| release | 不注入 | 隐藏 | 左移至 x=16 | 450（减半） | 1 屏 | 原生显示 |
+| tag | 不注入 | 保留 | 不左移 | 视口全高 | 整页滚动 | 仅首屏 |
+| 分支 | 注入 | 隐藏 | 左移至 x=16 | 视口全高 | 整页滚动 | 仅首屏 |
+
+- **模拟地址栏**：master 与分支页面在顶部注入模拟浏览器地址栏（显示 `https://...` URL 文本，剥离 token），便于审计时确认页面来源；baseline / release / tag 页面不注入，保留 GitLab 原生页面观感
+- **左侧边栏**：除 tag 外均隐藏 GitLab 左侧导航侧边栏并把主内容左移铺满视口（master 左移至 x=48 增加左边距，其余左移至 x=16）；tag 保留侧边栏，展示 GitLab 原生布局
+- **单屏高度**：baseline / release 为 commits 页面，用减半高度（默认 450px，`--commit-viewport-height` 可调）只截视口顶部，突出前几个提交；其余类型用视口全高（默认 900px）
+- **截图屏数**：baseline / release 只截 1 屏（`--commit-screens` 可调，1 屏约 3-5 个提交）；其余类型整页滚动直至 `--max-screens` 上限
+- **面包屑**：注入地址栏的页面（master / 分支），fixed 定位的 GitLab 顶部栏会被 `translateY` 下移到地址栏下方使首屏面包屑可见，首屏后隐藏顶部栏避免后续屏重复；tag 不注入地址栏但多屏滚动，同样首屏后隐藏顶部栏；baseline / release 只截 1 屏，面包屑在原生位置显示
 
 ---
 
@@ -212,7 +230,7 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
    - **tag**：截 `/-/tags` 第一页，保存为 `{包名}_tag{NN}.png`
    - **分支**：截除 master 外各分支的 `/-/tree/<branch>`，保存为 `{包名}_{分支名}{NN}.png`
 
-每张截图前：打印访问路径 → 注入模拟地址栏（显示 URL 文本，剥离敏感 query 参数）→ 给 `body` 加 `padding-top` 下移普通流内容、用 `translateY` 下移 fixed 定位的 GitLab top-bar，避免地址栏遮挡面包屑 → 移除 `img` 的 `loading` 属性 → 预滚动触发懒加载 → 等 `domcontentloaded` → 回滚顶部 → 重新读 `scrollHeight` → 注入隐藏 CSS（除非 `--keep-fixed`）→ 按视口高度逐屏 `full_page=False` 截图。第一屏后隐藏 GitLab 顶部栏（含面包屑，fixed 不随滚动离开视口），实现仅首屏显示面包屑。失败时打印具体原因并跳过。
+每张截图前：打印访问路径 → 按页面类型决定是否注入模拟地址栏（master / 分支注入，baseline / release / tag 不注入）→ 给 `body` 加 `padding-top` 下移普通流内容、用 `translateY` 下移 fixed 定位的 GitLab top-bar，避免地址栏遮挡面包屑 → 移除 `img` 的 `loading` 属性 → 预滚动触发懒加载 → 等 `domcontentloaded` → 回滚顶部 → 重新读 `scrollHeight` → 注入隐藏 CSS 隐藏侧边栏并左移内容（tag 保留侧边栏；除非 `--keep-fixed`）→ 按视口高度逐屏 `full_page=False` 截图。第一屏后隐藏 GitLab 顶部栏（含面包屑，fixed 不随滚动离开视口），实现仅首屏显示面包屑。失败时打印具体原因并跳过。各类截图的具体样式见「5 类审计截图与文件命名 → 截图样式」。
 
 ---
 

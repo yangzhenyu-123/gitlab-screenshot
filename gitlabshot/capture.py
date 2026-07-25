@@ -112,7 +112,7 @@ def launch_browser(config: Config):
     return (browser, context, page)
 
 
-def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = None, inject_urlbar: bool = True, shot_height: int = None, target_x: int = 16) -> list:
+def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = None, inject_urlbar: bool = True, shot_height: int = None, target_x: int = 16, keep_sidebar: bool = False) -> list:
     """对指定 URL 逐视口截图，返回截图文件 Path 列表。tmp_dir 是 pathlib.Path。
 
     max_screens: 可选，覆盖 config.max_screens。用于 commits 类页面（版本发布
@@ -125,6 +125,10 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
     而不影响其它页面的全局视口。同时作为滚动步长，确保连续截图无遗漏。
     target_x: 左移目标 x 坐标（像素）。面包屑与主内容平移到此 x，默认 16。
     master 等页面可传较大值（如 48）增加左边距。
+    keep_sidebar: 是否保留 GitLab 左侧导航侧边栏。默认 False（与全局 keep_fixed
+        一致，隐藏侧边栏并把内容左移铺满）。tag 列表页传 True 保留侧边栏，
+        展示 GitLab 原生布局；此时不隐藏侧边栏、不左移内容。全局 --keep-fixed
+        优先级更高，为 True 时无论此参数一律保留所有固定元素。
     """
     # a. 导航到目标 URL（网页会话由表单登录的 cookie 维持）
     if max_screens is None:
@@ -150,6 +154,12 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
     #    inject_urlbar=False 时跳过（如 commits 页只保留 GitLab 原生面包屑路径）
     # 注入地址栏的页面，top-bar 需下移 URLBAR_HEIGHT；否则无需下移
     top_offset = URLBAR_HEIGHT if inject_urlbar else 0
+    # 是否隐藏 GitLab chrome（左侧边栏）并左移内容：全局 keep_fixed 或 per-call
+    # keep_sidebar 任一为 True 即保留，不隐藏不左移。
+    hide_chrome = not config.keep_fixed and not keep_sidebar
+    # 是否在第一屏后隐藏 fixed 定位的 top-bar（含面包屑）：只受全局 keep_fixed
+    # 控制，与 keep_sidebar 无关——保留侧边栏时后续屏仍不应重复出现面包屑。
+    hide_topbar = not config.keep_fixed
     if inject_urlbar:
         page.evaluate(
             """(args) => {
@@ -201,7 +211,7 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
     #    改用 transform: translateX 把面包屑与 main 各自平移到目标左缘（视口左缘
     #    + 16px 留白）。transform 是合成层属性，运行时不管理，不会被覆盖。
     #    每次截图前重执行以应对滚动中变化。
-    if not config.keep_fixed:
+    if hide_chrome:
         page.add_style_tag(
             content=(
                 # 左侧导航侧边栏：精确命中，不误伤右侧项目信息面板
@@ -262,7 +272,7 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
     while scroll_y < total_height and page_num <= max_screens:
         page.evaluate(f"window.scrollTo(0, {scroll_y})")
         page.wait_for_timeout(config.wait_ms)
-        if not config.keep_fixed:
+        if hide_chrome:
             page.evaluate(_force_layout_js(target_x, top_offset))
         path = tmp_dir / f"page_{page_num:03d}.png"
         # shot_height < viewport 时用 clip 只截视口顶部 shot_height 区域
@@ -277,8 +287,9 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
         # 第一屏截图后隐藏 GitLab 顶部栏（含面包屑）。top-bar-fixed 是 fixed
         # 定位不随滚动离开视口，下移后若不隐藏，后续屏会重复出现面包屑及空条。
         # 整体隐藏 top-bar（已确认其内仅有面包屑可见）；同时隐藏面包屑本身作为
-        # top-bar 选择器未命中时的 fallback。
-        if page_num == 1 and not config.keep_fixed:
+        # top-bar 选择器未命中时的 fallback。保留侧边栏（keep_sidebar）时仍需
+        # 隐藏 top-bar，避免后续屏重复面包屑。
+        if page_num == 1 and hide_topbar:
             page.evaluate(
                 """() => {
                     const tb = document.querySelector(

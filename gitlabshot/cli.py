@@ -410,7 +410,8 @@ def main() -> int:
             print("正在截图版本标签列表...")
             try:
                 tags_imgs = capture_page(
-                    page, tags_list_url, config, tmp_dir, inject_urlbar=False,
+                    page, tags_list_url, config, tmp_dir,
+                    inject_urlbar=False, keep_sidebar=True,
                 )
             except NavigationError as exc:
                 print(f"警告：{exc}，已跳过")
