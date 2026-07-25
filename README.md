@@ -13,9 +13,9 @@
 - **YAML 配置文件**：通过 `--config` 集中管理项目地址、token、基线 tag、发布标签等，命令行参数优先级更高
 - **Token + 用户名密码双认证**：API 用 PAT 调用；网页会话用用户名+密码表单登录（token 方式的网页认证在内网不可用，已移除）
 - **逐视口截图**：Playwright 无头 Chromium 按视口高度滚动，每屏单独保存
-- **模拟地址栏注入**：每节首屏顶部显示 URL 文本（不含 token，无 favicon）
-- **懒加载处理**：截图前移除 `loading` 属性、预滚动触发加载、等待 `networkidle`
-- **固定元素隐藏**：默认注入 CSS 隐藏 GitLab 顶部导航与左侧栏（可 `--keep-fixed` 保留）
+- **模拟地址栏注入**：每屏顶部显示 URL 文本（不含 token、无 favicon），自动剥离 query 中的 `private_token`/`token`/`access_token` 等敏感参数；通过 `body padding-top` 让页面内容下移，避免地址栏遮挡 GitLab 面包屑与 top-bar
+- **懒加载处理**：截图前移除 `loading` 属性、预滚动触发加载、等待 `domcontentloaded`
+- **固定元素隐藏**：默认注入 CSS 隐藏 GitLab 左侧导航侧边栏（可 `--keep-fixed` 保留）；首屏后隐藏 sticky 面包屑，避免后续屏重复出现
 - **超长页面保护**：`--max-screens` 兜底；commits 类页面用 `--commit-screens` 限定只截前几屏（3-5 个提交）
 - **诊断友好**：每步截图前打印完整访问路径；失败时打印具体原因
 - **内网友好**：依赖支持离线安装，Chromium 可离线部署，默认忽略自签名证书错误
@@ -179,8 +179,6 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
 | `--baseline-tag` | `20250901_Release` | 产品基线参考标签 |
 | `--release-tag` | （空） | 送测产品版本发布标签 |
 | `--keep-fixed` | `False` | 保留 GitLab 固定元素（不注入隐藏 CSS） |
-| `--format` | `png` | 图片格式：`png` 或 `jpeg` |
-| `--quality` | `85` | JPEG 质量（PNG 忽略） |
 | `--branch` | （空） | 指定分支（可多次传入），不传则截取所有分支 |
 | `--only` | （空） | 只截指定类型（`master`/`baseline`/`release`/`tag`），可逗号分隔或多次传入；不传则全截，指定后未列出的类型及分支截图将被跳过 |
 | `--executable-path` | （空） | 指定系统 Chromium 路径 |
@@ -214,7 +212,7 @@ gitlabshot https://gitlab.internal/group/project --token <PAT> \
    - **tag**：截 `/-/tags` 第一页，保存为 `{包名}_tag{NN}.png`
    - **分支**：截除 master 外各分支的 `/-/tree/<branch>`，保存为 `{包名}_{分支名}{NN}.png`
 
-每张截图前：打印访问路径 → 注入模拟地址栏（显示 URL 文本）→ 移除 `img` 的 `loading` 属性 → 预滚动触发懒加载 → 等 `networkidle` → 回滚顶部 → 重新读 `scrollHeight` → 注入隐藏 CSS（除非 `--keep-fixed`）→ 按视口高度逐屏 `full_page=False` 截图。失败时打印具体原因并跳过。
+每张截图前：打印访问路径 → 注入模拟地址栏（显示 URL 文本，剥离敏感 query 参数）→ 给 `body` 加 `padding-top` 让内容下移避免遮挡 → 移除 `img` 的 `loading` 属性 → 预滚动触发懒加载 → 等 `domcontentloaded` → 回滚顶部 → 重新读 `scrollHeight` → 注入隐藏 CSS（除非 `--keep-fixed`）→ 按视口高度逐屏 `full_page=False` 截图。第一屏后隐藏 GitLab 原生面包屑（sticky 不随滚动离开视口），实现仅首屏显示面包屑。失败时打印具体原因并跳过。
 
 ---
 

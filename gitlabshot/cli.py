@@ -61,7 +61,7 @@ def main() -> int:
     """CLI 主函数，返回退出码。"""
     parser = argparse.ArgumentParser(
         prog="gitlabshot",
-        description="GitLab 仓库审计逐屏截图转 Word 工具",
+        description="GitLab 仓库审计逐屏截图工具（PNG 文件输出）",
     )
     parser.add_argument("project_url", nargs="?", help="GitLab 项目地址")
     parser.add_argument(
@@ -89,15 +89,6 @@ def main() -> int:
         "--keep-fixed", action="store_true", help="保留 GitLab 固定元素"
     )
     parser.add_argument(
-        "--continuous", action="store_true", help="连续排列（不分页）"
-    )
-    parser.add_argument(
-        "--format", choices=["png", "jpeg"], default="png", help="图片格式"
-    )
-    parser.add_argument("--quality", type=int, default=85, help="JPEG 质量")
-    parser.add_argument("--margin", type=float, default=0.5, help="页边距（英寸）")
-    parser.add_argument("--dpi", type=int, default=96, help="DPI")
-    parser.add_argument(
         "--branch", action="append", default=None, help="指定分支（可多次）"
     )
     parser.add_argument(
@@ -106,15 +97,6 @@ def main() -> int:
         default=None,
         help="只截指定类型（master/baseline/release/tag），可逗号分隔或多次传入；"
         "不传则全截。指定后未列出的类型及分支截图将被跳过",
-    )
-    parser.add_argument(
-        "--context-tag", default=None, help="指定 tag 做上下文截图"
-    )
-    parser.add_argument(
-        "--context-direction",
-        choices=["newer", "older"],
-        default="newer",
-        help="上下文方向",
     )
     parser.add_argument(
         "--executable-path", default=None, help="指定 Chromium 路径"
@@ -228,16 +210,9 @@ def main() -> int:
         wait_ms=cfg_file.get("wait", args.wait),
         max_screens=cfg_file.get("max_screens", args.max_screens),
         keep_fixed=cfg_file.get("keep_fixed", args.keep_fixed),
-        image_format=cfg_file.get("format", args.format),
-        quality=cfg_file.get("quality", args.quality),
-        dpi=cfg_file.get("dpi", args.dpi),
         output_dir=output_dir_val,
         pkg_name=pkg_name_val,
-        continuous=cfg_file.get("continuous", args.continuous),
-        margin_inches=cfg_file.get("margin", args.margin),
         branches=args.branch or [],
-        context_tag=args.context_tag,
-        context_direction=args.context_direction,
         executable_path=executable_arg,
         baseline_tag=baseline_tag_val,
         release_tag=release_tag_val,
@@ -251,7 +226,7 @@ def main() -> int:
         password=password_arg,
     )
 
-    # 5. 解析项目地址并填入 config
+    # 4b. 解析项目地址并填入 config
     try:
         base_url, project_path, url_encoded_path = parse_project_url(config.project_url)
     except Exception as exc:

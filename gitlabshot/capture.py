@@ -1,7 +1,7 @@
 """Playwright 逐视口截图核心模块。
 
 驱动无头 Chromium 按视口高度逐屏滚动网页并截取当前可见视口，
-生成有序截图列表，供后续审计文档拼装使用。
+生成有序截图列表，供后续按命名规范保存为 PNG 文件。
 """
 from gitlabshot.config import Config
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
@@ -124,26 +124,45 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
         )
 
     # b. 注入模拟浏览器地址栏（只显示 https:// 文本，不含 favicon/锁图标）
-    #    用 fixed 定位固定在视口顶部，每屏截图都可见；第一屏在地址栏下方
-    #    还能看到 GitLab 原生面包屑，后续屏面包屑滚出视口只剩地址栏。
+    #    用 fixed 定位固定在视口顶部，每屏截图都可见；同时给 body 加 padding-top
+    #    让页面内容（含 GitLab 面包屑/top-bar）整体下移，避免被地址栏遮挡。
     #    inject_urlbar=False 时跳过（如 commits 页只保留 GitLab 原生面包屑路径）
     if inject_urlbar:
         page.evaluate(
             """(url) => {
+                const BAR_H = 36;
+                // 剥离 query 中的敏感参数，避免 token 进入截图
+                let safeUrl = url;
+                try {
+                    const u = new URL(url);
+                    ['private_token', 'token', 'access_token'].forEach(
+                        k => u.searchParams.delete(k)
+                    );
+                    safeUrl = u.toString();
+                } catch (e) { /* 非 URL 直接用原文 */ }
+                // 多次调用时先移除既有地址栏，避免重复堆叠
+                document.querySelectorAll('[data-gitlabshot-urlbar="1"]')
+                    .forEach(el => el.remove());
                 const bar = document.createElement('div');
                 bar.setAttribute('data-gitlabshot-urlbar', '1');
                 bar.style.cssText = (
                     'display:flex;align-items:center;box-sizing:border-box;'
-                    + 'width:100%;height:40px;padding:0 16px;'
-                    + 'background:#f1f3f4;border-bottom:1px solid #dadce0;'
+                    + 'width:100%;height:' + BAR_H + 'px;padding:0 14px;'
+                    + 'background:#ffffff;border-bottom:1px solid #e1e4e8;'
+                    + 'box-shadow:0 1px 2px rgba(0,0,0,0.05);'
                     + 'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",'
-                    + 'Roboto,Helvetica,Arial,sans-serif;font-size:14px;'
-                    + 'color:#202124;white-space:nowrap;overflow:hidden;'
-                    + 'text-overflow:ellipsis;'
+                    + 'Roboto,Helvetica,Arial,sans-serif;font-size:13px;'
+                    + 'font-weight:400;color:#5f6368;letter-spacing:0.1px;'
+                    + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
                     + 'position:fixed;top:0;left:0;z-index:99999;'
                 );
-                bar.textContent = url;
+                bar.textContent = safeUrl;
+                bar.setAttribute('title', safeUrl);
                 document.body.insertBefore(bar, document.body.firstChild);
+                // 推 body 下移，避免地址栏 fixed 遮挡页面顶部内容
+                document.body.style.setProperty(
+                    'padding-top', BAR_H + 'px', 'important'
+                );
             }""",
             display_url,
         )

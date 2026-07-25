@@ -19,22 +19,14 @@ class Config:
     viewport_height: int = 900
     wait_ms: int = 800
     max_screens: int = 20
-    keep_fixed: bool = False
-    image_format: str = "png"  # png | jpeg
-    quality: int = 85
-    dpi: int = 96
+    keep_fixed: bool = False  # 是否保留 GitLab 固定导航栏/侧边栏
 
-    # ---- 文档 ----
-    output_path: str = "audit.docx"
+    # ---- 文件输出 ----
     output_dir: str = "."          # 截图文件输出目录
     pkg_name: Optional[str] = None  # 文件名前缀（包名），默认取项目路径末段
-    continuous: bool = False
-    margin_inches: float = 0.5
 
     # ---- 审计内容 ----
     branches: List[str] = field(default_factory=list)  # 指定分支，空则取所有分支
-    context_tag: Optional[str] = None
-    context_direction: str = "newer"  # newer | older
 
     # ---- 版本发布时间 / 产品基线 截图 ----
     # commits 类页面（/-/commits/<ref>）只截前几屏，默认 1 屏（约 3-5 个提交）
@@ -47,9 +39,9 @@ class Config:
     # 送测产品版本发布标签：截图 /-/commits/<release_tag>
     release_tag: Optional[str] = None
 
-    # ---- 网页登录回退（token 方式失败时使用用户名+密码表单登录）----
-    username: Optional[str] = None  # 显式用户名，覆盖 API 获取的 username
-    password: Optional[str] = None  # 账号密码，用于表单登录回退
+    # ---- 网页登录（用户名+密码表单登录，token 仅用于 API）----
+    username: Optional[str] = None
+    password: Optional[str] = None
 
     # ---- 浏览器与网络 ----
     executable_path: Optional[str] = None

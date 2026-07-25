@@ -1,19 +1,12 @@
 """GitLab 网页会话建立模块。
 
-仅凭 Personal Access Token (PAT) 建立可访问受保护页面的浏览器会话。
+仅通过「用户名 + 密码」提交 GitLab 登录表单建立网页会话。
 
-内网 GitLab 常见阻碍：
-- 较新版本 GitLab 不允许 PAT 作为密码提交登录表单（PAT 仅用于 API / Basic Auth）；
-- 启用 2FA 的账号无法用 PAT 登录表单；
-- 表单登录依赖 CSRF token，自动化易失败。
+内网 GitLab 实测：Personal Access Token (PAT) 无法用于网页表单登录
+（较新版本 GitLab 拒绝把 PAT 当作表单密码，启用 2FA 的账号同样失败），
+因此 PAT 只用于 API 调用，网页会话统一走用户名+密码表单登录。
 
-因此本模块优先采用 GitLab 官方支持的 HTTP Basic Auth 方式：以
-`oauth2` 作为用户名、PAT 作为密码，通过 Playwright context 的 HTTP 凭证
-注入，访问任意 GitLab 页面时浏览器自动附带 Basic Auth header。该方式对
-公开/私有项目均有效，且无需表单交互、不受 2FA 与 CSRF 影响。
-
-若 Basic 方式不可用（极少数 GitLab 配置禁用 Basic Auth），回退到表单登录。
-全程不输出 token 明文。
+全程不输出密码明文。
 """
 import logging
 from typing import Any, Optional, Type
@@ -26,7 +19,7 @@ class LoginError(Exception):
 
 
 def mask_token(token: str) -> str:
-    """返回脱敏后的 token 字符串，用于日志与错误输出。
+    """返回脱敏后的凭证字符串，用于日志与错误输出。
 
     空字符串返回 "<empty>"；长度 <= 4 返回 "***"；否则返回前 4 位 + "***"。
     """
@@ -49,38 +42,21 @@ def _playwright_timeout_error() -> Optional[Type[BaseException]]:
         return None
 
 
-def establish_session_basic(context: Any, base_url: str, token: str) -> None:
-    """记录 HTTP Basic Auth 会话已建立（凭证在创建 context 时注入）。
-
-    Playwright 的 http_credentials 需在 `browser.new_context()` 时传入，
-    本函数仅做日志记录与存在性校验，便于编排层在「Basic → 表单」回退流程中
-    保持对称调用。凭证实际由 capture.launch_browser(config, http_credentials)
-    在创建 context 时注入。
-    """
-    logger.info(
-        "HTTP Basic Auth 凭证已注入（oauth2 + token=%s），作用域 %s",
-        mask_token(token),
-        base_url.rstrip("/"),
-    )
-
-
 def establish_session_form(
     page: Any, base_url: str, username: str, credential: str, credential_kind: str = "password"
 ) -> None:
-    """通过 GitLab 登录表单建立网页会话（回退方式）。
+    """通过 GitLab 登录表单建立网页会话。
 
     page 为 Playwright 同步 API 的 Page 对象；base_url 末尾斜杠会被去除。
     以「用户名 + credential 作为密码」提交登录表单。credential_kind 用于
     日志标识（"password" 或 "token"）。登录成功（当前 URL 不再含
     /users/sign_in）后正常返回，失败抛 LoginError（含页面错误提示）。
-
-    注意：较新版本 GitLab 可能不接受 PAT 作为表单密码，此方式仅作回退。
     """
     base = base_url.rstrip("/")
     sign_in_url = f"{base}/users/sign_in"
     masked = mask_token(credential)
     logger.info(
-        "回退到表单登录 username=%s %s=%s", username, credential_kind, masked
+        "表单登录 username=%s %s=%s", username, credential_kind, masked
     )
 
     timeout_error = _playwright_timeout_error()
@@ -160,35 +136,3 @@ def _read_alert(page: Any) -> str:
         except Exception:
             continue
     return ""
-
-
-def verify_session(page: Any, base_url: str, project_path: str, token: str) -> bool:
-    """验证会话是否可访问受保护页面。
-
-    访问带 ?private_token=TOKEN 的项目根页面，若未被重定向到 /users/sign_in
-    则视为会话有效。返回 True 表示可访问，False 表示需要登录。
-
-    private_token 是 GitLab 网页端官方支持的 PAT 认证方式之一，对禁用
-    Basic Auth / 表单 PAT 登录的内网实例尤其关键。
-    """
-    from urllib.parse import urlsplit, urlunsplit, urlencode
-
-    base = base_url.rstrip("/")
-    probe_url = f"{base}/{project_path}"
-    if token:
-        parts = urlsplit(probe_url)
-        extra = urlencode({"private_token": token})
-        new_query = (
-            f"{parts.query}&{extra}" if parts.query else extra
-        )
-        probe_url = urlunsplit(
-            (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
-        )
-    timeout_error = _playwright_timeout_error()
-    try:
-        page.goto(probe_url, wait_until="domcontentloaded")
-    except Exception as exc:
-        if timeout_error is not None and isinstance(exc, timeout_error):
-            return False
-        raise
-    return "/users/sign_in" not in page.url
