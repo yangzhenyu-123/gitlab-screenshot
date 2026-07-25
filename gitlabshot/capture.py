@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright, Error as PlaywrightError
 # padding-top 让普通流内容下移；但 GitLab 的 top-bar-fixed 是 fixed 定位，
 # padding-top 推不动它，需在 _force_layout_js 中额外 translateY 下移，
 # 否则面包屑（在 top-bar-fixed 内）会被模拟地址栏遮挡。
-URLBAR_HEIGHT = 36
+URLBAR_HEIGHT = 40
 
 
 # 生成强制布局修正 JS：隐藏侧边栏后，面包屑与主内容对齐并尽量左移。
@@ -176,22 +176,53 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
                 // 多次调用时先移除既有地址栏，避免重复堆叠
                 document.querySelectorAll('[data-gitlabshot-urlbar="1"]')
                     .forEach(el => el.remove());
+
+                // 外层地址栏：浅灰背景，与浏览器标签栏/工具栏融为一体
                 const bar = document.createElement('div');
                 bar.setAttribute('data-gitlabshot-urlbar', '1');
                 bar.style.cssText = (
-                    'display:flex;align-items:center;box-sizing:border-box;'
-                    + 'width:100%;height:' + BAR_H + 'px;padding:0 14px;'
-                    + 'background:#ffffff;border-bottom:1px solid #e1e4e8;'
-                    + 'box-shadow:0 1px 2px rgba(0,0,0,0.05);'
+                    'display:flex;align-items:center;justify-content:center;'
+                    + 'box-sizing:border-box;width:100%;height:' + BAR_H + 'px;'
+                    + 'padding:0 60px;background:#eef1f4;'
+                    + 'border-bottom:1px solid #d4d8dc;'
                     + 'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",'
-                    + 'Roboto,Helvetica,Arial,sans-serif;font-size:13px;'
-                    + 'font-weight:400;color:#5f6368;letter-spacing:0.1px;'
-                    + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+                    + 'Roboto,Helvetica,Arial,sans-serif;'
                     + 'position:fixed;top:0;left:0;z-index:99999;'
                 );
-                bar.textContent = safeUrl;
-                bar.setAttribute('title', safeUrl);
+
+                // 内层地址输入框：白色圆角胶囊，放置 URL 文本与图标
+                const box = document.createElement('div');
+                box.style.cssText = (
+                    'display:flex;align-items:center;'
+                    + 'box-sizing:border-box;max-width:960px;width:100%;'
+                    + 'height:28px;padding:0 12px;'
+                    + 'background:#ffffff;border:1px solid #dadce0;'
+                    + 'border-radius:16px;'
+                    + 'box-shadow:0 1px 2px rgba(60,64,67,0.08);'
+                );
+
+                // 左侧占位图标：灰色圆形（模拟未加载的网站 favicon）
+                const icon = document.createElement('div');
+                icon.style.cssText = (
+                    'flex:0 0 auto;width:14px;height:14px;margin-right:8px;'
+                    + 'background:#dadce0;border-radius:50%;'
+                );
+
+                // URL 文本：深灰、省略号
+                const text = document.createElement('span');
+                text.style.cssText = (
+                    'flex:1 1 auto;min-width:0;'
+                    + 'font-size:13px;font-weight:400;color:#3c4043;'
+                    + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+                );
+                text.textContent = safeUrl;
+                text.setAttribute('title', safeUrl);
+
+                box.appendChild(icon);
+                box.appendChild(text);
+                bar.appendChild(box);
                 document.body.insertBefore(bar, document.body.firstChild);
+
                 // 推 body 下移，避免地址栏 fixed 遮挡页面顶部内容（普通流元素）
                 // fixed 定位的 top-bar 由 _force_layout_js 的 translateY 下移
                 document.body.style.setProperty(
