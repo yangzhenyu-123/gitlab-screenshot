@@ -6,6 +6,12 @@
 from gitlabshot.config import Config
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
+# 注入的模拟浏览器地址栏高度（像素）。fixed 定位覆盖视口顶部，body 加
+# padding-top 让普通流内容下移；但 GitLab 的 top-bar-fixed 是 fixed 定位，
+# padding-top 推不动它，需在 _force_layout_js 中额外 translateY 下移，
+# 否则面包屑（在 top-bar-fixed 内）会被模拟地址栏遮挡。
+URLBAR_HEIGHT = 36
+
 
 # 生成强制布局修正 JS：隐藏侧边栏后，面包屑与主内容对齐并尽量左移。
 # GitLab 16+ super sidebar 是运行时 JS 组件，会在导航/滚动/resize 后动态重写
@@ -16,10 +22,23 @@ from playwright.sync_api import sync_playwright, Error as PlaywrightError
 # - 同时扩展 main 宽度铺满到视口右缘，避免平移后右侧留白
 # - transform 是合成层属性，GitLab 运行时不管理它，不会被覆盖
 # 在导航后与每次截图前各执行一次，应对滚动中坐标变化。
-def _force_layout_js(target_x: int) -> str:
+# top_offset：注入模拟地址栏时传 URLBAR_HEIGHT，把 fixed 定位的 GitLab
+# top-bar 下移到地址栏下方（padding-top 推不动 fixed 元素）；不注入地址栏
+# 的页面传 0。
+def _force_layout_js(target_x: int, top_offset: int = 0) -> str:
     return """() => {
     const TARGET_X = """ + str(target_x) + """;
+    const TOP_OFFSET = """ + str(top_offset) + """;
     const vw = document.documentElement.clientWidth || window.innerWidth;
+    // 注入模拟地址栏后，GitLab 的 top-bar-fixed 是 fixed 定位，body 的
+    // padding-top 推不动它，会被地址栏遮挡。这里用 translateY 把它下移到
+    // 地址栏下方，使其内的面包屑在第一屏可见。
+    if (TOP_OFFSET > 0) {
+        const tb = document.querySelector('.top-bar-fixed, .top-bar');
+        if (tb) tb.style.setProperty(
+            'transform', 'translateY(' + TOP_OFFSET + 'px)', 'important'
+        );
+    }
     const bc = document.querySelector(
         '.gl-breadcrumbs, .breadcrumbs-container, .breadcrumbs, '
         + '[data-testid="breadcrumb"]'
@@ -125,12 +144,16 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
 
     # b. 注入模拟浏览器地址栏（只显示 https:// 文本，不含 favicon/锁图标）
     #    用 fixed 定位固定在视口顶部，每屏截图都可见；同时给 body 加 padding-top
-    #    让页面内容（含 GitLab 面包屑/top-bar）整体下移，避免被地址栏遮挡。
+    #    让普通流内容下移。但 GitLab 的 top-bar-fixed 是 fixed 定位，padding-top
+    #    推不动它，会在 c 步的 _force_layout_js 中用 translateY 下移到地址栏下方，
+    #    否则其内的面包屑会被地址栏遮挡。
     #    inject_urlbar=False 时跳过（如 commits 页只保留 GitLab 原生面包屑路径）
+    # 注入地址栏的页面，top-bar 需下移 URLBAR_HEIGHT；否则无需下移
+    top_offset = URLBAR_HEIGHT if inject_urlbar else 0
     if inject_urlbar:
         page.evaluate(
-            """(url) => {
-                const BAR_H = 36;
+            """(args) => {
+                const url = args[0], BAR_H = args[1];
                 // 剥离 query 中的敏感参数，避免 token 进入截图
                 let safeUrl = url;
                 try {
@@ -159,12 +182,13 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
                 bar.textContent = safeUrl;
                 bar.setAttribute('title', safeUrl);
                 document.body.insertBefore(bar, document.body.firstChild);
-                // 推 body 下移，避免地址栏 fixed 遮挡页面顶部内容
+                // 推 body 下移，避免地址栏 fixed 遮挡页面顶部内容（普通流元素）
+                // fixed 定位的 top-bar 由 _force_layout_js 的 translateY 下移
                 document.body.style.setProperty(
                     'padding-top', BAR_H + 'px', 'important'
                 );
             }""",
-            display_url,
+            [display_url, URLBAR_HEIGHT],
         )
 
     # c. 隐藏 GitLab 左侧导航侧边栏，面包屑与主内容对齐并尽量左移
@@ -186,7 +210,7 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
                 "[data-testid=\"super-sidebar\"] { display: none !important; }"
             )
         )
-        page.evaluate(_force_layout_js(target_x))
+        page.evaluate(_force_layout_js(target_x, top_offset))
 
     # d. 移除懒加载属性，确保图片随滚动加载
     page.evaluate(
@@ -239,7 +263,7 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
         page.evaluate(f"window.scrollTo(0, {scroll_y})")
         page.wait_for_timeout(config.wait_ms)
         if not config.keep_fixed:
-            page.evaluate(_force_layout_js(target_x))
+            page.evaluate(_force_layout_js(target_x, top_offset))
         path = tmp_dir / f"page_{page_num:03d}.png"
         # shot_height < viewport 时用 clip 只截视口顶部 shot_height 区域
         if shot_height < viewport_height:
@@ -250,11 +274,17 @@ def capture_page(page, url: str, config: Config, tmp_dir, max_screens: int = Non
         else:
             page.screenshot(path=str(path), full_page=False)
         screenshots.append(path)
-        # 第一屏截图后隐藏 GitLab 原生面包屑（sticky/fixed 不随滚动离开视口），
-        # 后续屏不再显示，实现只有第一张显示面包屑
+        # 第一屏截图后隐藏 GitLab 顶部栏（含面包屑）。top-bar-fixed 是 fixed
+        # 定位不随滚动离开视口，下移后若不隐藏，后续屏会重复出现面包屑及空条。
+        # 整体隐藏 top-bar（已确认其内仅有面包屑可见）；同时隐藏面包屑本身作为
+        # top-bar 选择器未命中时的 fallback。
         if page_num == 1 and not config.keep_fixed:
             page.evaluate(
                 """() => {
+                    const tb = document.querySelector(
+                        '.top-bar-fixed, .top-bar'
+                    );
+                    if (tb) tb.style.setProperty('display', 'none', 'important');
                     const bc = document.querySelector(
                         '.gl-breadcrumbs, .breadcrumbs-container, .breadcrumbs, '
                         + '[data-testid="breadcrumb"]'
